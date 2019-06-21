@@ -31,6 +31,7 @@ wayland_protos = dependency('wayland-protocols')
 libavutil = dependency('libavutil')
 libavcodec = dependency('libavcodec')
 libavformat = dependency('libavformat')
+libavfilter = dependency('libavfilter')
 sws = dependency('libswscale')
 swr = dependency('libswresample')
 threads = dependency('threads')
@@ -38,5 +39,5 @@ pulse = dependency('libpulse-simple')
 
 subdir('proto')
 executable('wf-recorder', ['src/frame-writer.cpp', 'src/main.cpp', 'src/pulse.cpp', 'src/averr.c'],
-        dependencies: [wayland_client, wayland_protos, libavutil, libavcodec, libavformat, wf_protos, sws, threads, pulse, swr],
+        dependencies: [wayland_client, wayland_protos, libavutil, libavcodec, libavformat, libavfilter, wf_protos, sws, threads, pulse, swr],
         install: true)

@@ -18,6 +18,7 @@ extern "C"
     #include <libavcodec/avcodec.h>
     #include <libavutil/mathematics.h>
     #include <libavformat/avformat.h>
+    #include <libavfilter/avfilter.h>
     #include <libavutil/pixdesc.h>
     #include <libavutil/hwcontext.h>
     #include <libavutil/opt.h>
@@ -37,6 +38,8 @@ struct FrameWriterParams
 
     InputFormat format;
 
+    std::string video_filter;
+  
     std::string codec;
     std::string hw_device; // used only if codec contains vaapi
     std::map<std::string, std::string> codec_options;
@@ -60,6 +63,10 @@ class FrameWriter
     AVCodecContext* videoCodecCtx;
     AVFormatContext* fmtCtx;
 
+    AVFilterContext * bufferSrcCtx = NULL;
+    AVFilterContext * bufferSinkCtx = NULL;
+    AVFilterGraph   * filterGraph = NULL;
+ 
     AVBufferRef *hw_device_context = NULL;
     AVBufferRef *hw_frame_context = NULL;
 

@@ -10,7 +10,17 @@
 #include <cstring>
 #include "averr.h"
 
-#define FPS 60
+
+// REMARK: Removed FPS=60 because using 1/FPS as time_base
+//         only makes sense if the FPS is the actual framerate
+//         (and it is probably not).
+//         The 'usec' argument of add_frame is in μs so it
+//         makes more sense to use time_base=1/1000000 for the
+//         video stream.
+
+// US_RATIONAL = 1us as a AVRational
+#define US_RATIONAL (AVRational){ 1, 1000000 }
+
 #define AUDIO_RATE 44100
 
 class FFmpegInitialize
@@ -23,6 +33,7 @@ public :
         av_register_all();
     }
 };
+
 
 static FFmpegInitialize ffmpegInitialize;
 
@@ -132,6 +143,7 @@ void FrameWriter::init_video_stream()
     AVDictionary *options = NULL;
     load_codec_options(&options);
 
+    // ===================
     AVCodec* codec = avcodec_find_encoder_by_name(params.codec.c_str());
     if (!codec)
     {
@@ -149,8 +161,8 @@ void FrameWriter::init_video_stream()
     videoCodecCtx = videoStream->codec;
     videoCodecCtx->width = params.width;
     videoCodecCtx->height = params.height;
-    videoCodecCtx->time_base = (AVRational){ 1, FPS };
-
+    videoCodecCtx->time_base = US_RATIONAL ;
+    
     if (params.codec.find("vaapi") != std::string::npos)
     {
         videoCodecCtx->pix_fmt = AV_PIX_FMT_VAAPI;
@@ -176,7 +188,15 @@ void FrameWriter::init_video_stream()
         std::exit(-1);
     }
     av_dict_free(&options);
-    videoStream->time_base = (AVRational){ 1, FPS };
+
+    // Use the same time_base for the stream than for the codec.
+    // This is not strictly necessary but that makes sense.
+    // Reminder:
+    //   The value written now is just a hint for avformat_write_header().
+    //   It can be modified so we cannot avoid calling av_packet_rescale_ts()
+    //   on all packets.
+    videoStream->time_base = US_RATIONAL;
+
 }
 
 static uint64_t get_codec_channel_layout(AVCodec *codec)
@@ -269,14 +289,12 @@ void FrameWriter::init_codecs()
     init_video_stream();
     if (params.enable_audio)
         init_audio_stream();
-
     av_dump_format(fmtCtx, 0, params.file.c_str(), 1);
     if (avio_open(&fmtCtx->pb, params.file.c_str(), AVIO_FLAG_WRITE))
     {
         std::cerr << "avio_open failed" << std::endl;
         std::exit(-1);
     }
-
     AVDictionary *dummy = NULL;
     if (avformat_write_header(fmtCtx, &dummy) != 0)
     {
@@ -305,6 +323,7 @@ FrameWriter::FrameWriter(const FrameWriterParams& _params) :
     if (params.enable_ffmpeg_debug_output)
         av_log_set_level(AV_LOG_DEBUG);
 
+    
     // Preparing the data concerning the format and codec,
     // in order to write properly the header, frame data and end of file.
     this->outputFmt = av_guess_format(NULL, params.file.c_str(), NULL);
@@ -366,9 +385,8 @@ void FrameWriter::add_frame(const uint8_t* pixels, int64_t usec, bool y_invert)
         stride[0] *= -1;
     }
 
-    AVFrame **output_frame;
+    AVFrame *output_frame;
     AVBufferRef *saved_buf0 = NULL;
-
     if (hw_device_context)
     {
         encoder_frame->data[0] = (uint8_t*)formatted_pixels;
@@ -386,10 +404,10 @@ void FrameWriter::add_frame(const uint8_t* pixels, int64_t usec, bool y_invert)
             return;
         }
 
-        output_frame = &hw_frame;
+        output_frame = hw_frame;
     } else if(get_input_format() == videoCodecCtx->pix_fmt)
     {
-        output_frame = &encoder_frame;
+        output_frame = encoder_frame;
         encoder_frame->data[0] = (uint8_t*)formatted_pixels;
         encoder_frame->linesize[0] = stride[0];
         /* Force ffmpeg to create a copy of the frame, if the codec needs it */
@@ -402,10 +420,10 @@ void FrameWriter::add_frame(const uint8_t* pixels, int64_t usec, bool y_invert)
         /* Force ffmpeg to create a copy of the frame, if the codec needs it */
         saved_buf0 = encoder_frame->buf[0];
         encoder_frame->buf[0] = NULL;
-        output_frame = &encoder_frame;
+        output_frame = encoder_frame;
     }
 
-    (*output_frame)->pts = usec;
+    output_frame->pts = usec; // We use time_base = 1/US_RATE
 
     AVPacket pkt;
     av_init_packet(&pkt);
@@ -413,8 +431,7 @@ void FrameWriter::add_frame(const uint8_t* pixels, int64_t usec, bool y_invert)
     pkt.size = 0;
 
     int got_output;
-    avcodec_encode_video2(videoCodecCtx, &pkt, *output_frame, &got_output);
-
+    avcodec_encode_video2(videoCodecCtx, &pkt, output_frame, &got_output);
     /* Restore frame buffer, so that it can be properly freed in the end */
     if (saved_buf0)
         encoder_frame->buf[0] = saved_buf0;
@@ -491,7 +508,8 @@ void FrameWriter::finish_frame(AVPacket& pkt, bool is_video)
 
     if (is_video)
     {
-        av_packet_rescale_ts(&pkt, (AVRational){ 1, 1000000 }, videoStream->time_base);
+        // TODO: We use videoCodecCtx->time_base instead of US_RATIONAL                        
+        av_packet_rescale_ts(&pkt, US_RATIONAL, videoStream->time_base);
         pkt.stream_index = videoStream->index;
     } else
     {
