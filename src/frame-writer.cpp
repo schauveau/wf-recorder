@@ -10,7 +10,6 @@
 #include <cstring>
 #include "averr.h"
 
-
 // REMARK: Removed FPS=60 because using 1/FPS as time_base
 //         only makes sense if the FPS is the actual framerate
 //         (and it is probably not).
@@ -19,7 +18,8 @@
 //         video stream.
 
 // US_RATIONAL = 1us as a AVRational
-#define US_RATIONAL (AVRational){ 1, 1000000 }
+
+static const AVRational US_RATIONAL{1,1000000} ;
 
 #define AUDIO_RATE 44100
 
@@ -39,8 +39,32 @@ static FFmpegInitialize ffmpegInitialize;
 
 void FrameWriter::init_hw_accel()
 {
-    int ret = av_hwdevice_ctx_create(&this->hw_device_context,
-        av_hwdevice_find_type_by_name("vaapi"), params.hw_device.c_str(), NULL, 0);
+#if 1
+  if ( params.hw_method == "" )
+    return ; 
+
+  AVHWDeviceType hwtype = av_hwdevice_find_type_by_name( params.hw_method.c_str() );
+  if ( hwtype == AV_HWDEVICE_TYPE_NONE) {
+    std::cerr << "Unknowns or unavailable HW method '" << params.hw_method << "'\n";
+    std::exit(-1);
+  }
+
+  int ret = av_hwdevice_ctx_create(&this->hw_device_context,
+                                   hwtype,
+                                   params.hw_device.c_str(),
+                                   NULL,
+                                   0);
+  if (ret != 0)
+    {
+      std::cerr << "Failed to create HW device '" << params.hw_device << "': " << averr(ret) << std::endl;
+      std::exit(-1);
+    }
+
+  // TODO: store hw_device_context in the filter
+  
+#else
+  int ret = av_hwdevice_ctx_create(&this->hw_device_context,
+                                   av_hwdevice_find_type_by_name("vaapi"), params.hw_device.c_str(), NULL, 0);
 
     if (ret != 0)
     {
@@ -78,6 +102,7 @@ void FrameWriter::init_hw_accel()
         av_buffer_unref(&hw_frame_context);
         std::exit(-1);
     }
+#endif
 }
 
 void FrameWriter::load_codec_options(AVDictionary **dict)
@@ -138,6 +163,156 @@ AVPixelFormat FrameWriter::choose_sw_format(AVCodec *codec)
     return codec->pix_fmts[0];
 }
 
+void FrameWriter::init_video_filters(AVCodec *codec)
+{
+  int err;
+
+  AVFilterGraph *filter_graph = avfilter_graph_alloc();
+
+ 
+  const AVFilter * source = avfilter_get_by_name("buffer");
+  const AVFilter * sink   = avfilter_get_by_name("buffersink");
+  
+  if (!source || !sink) {
+    std::cerr << "filtering source or sink element not found\n";
+    exit(-1);
+  }
+
+  // Build the configuration of the 'buffer' filter.
+  // See: ffmpeg -h filter=buffer
+  // See: https://ffmpeg.org/ffmpeg-filters.html#buffer
+
+  const int sz=300 ; // TODO: use a std::stringstream?
+  char source_args[sz];
+  err = snprintf(source_args, sz, 
+                 "video_size=%dx%d:pix_fmt=%d:time_base=%d/%d:pixel_aspect=%d/%d",
+                 // video size
+                 params.width, params.height,
+                 // pix_fmt
+                 int(this->get_input_format()),
+                 // time_base. We use micro-seconds
+                 US_RATIONAL.num, US_RATIONAL.den, 
+                 // pixel_aspect
+                 1,1
+                 // sws_param
+                 /* unset */
+                 );
+  if (err >= sz) {
+    std::cerr << "I am paranoid" << std::endl;;
+    exit(-1);
+  }
+ 
+
+  AVFilterContext *source_ctx = NULL;
+  err = avfilter_graph_create_filter(&source_ctx, source, "Source",
+                                     source_args, NULL, filter_graph);
+  if (err < 0) {
+    std::cerr << "Cannot create video filter in: " << averr(err) << std::endl;;
+    exit(-1);
+  }
+  
+
+  AVFilterContext * sink_ctx = NULL ;
+  err = avfilter_graph_create_filter(&sink_ctx, sink, "Sink",
+                                     NULL, NULL, filter_graph);
+  if (err < 0) {
+    std::cerr << "Cannot create video filter out: " << averr(err) << std::endl;;
+    exit(-1);
+  }
+
+  // Indicate which pixel formats are accepted by our codec. 
+  
+#if 1 
+  err = av_opt_set_int_list(sink_ctx, "pix_fmts", codec->pix_fmts,
+                            AV_PIX_FMT_NONE, AV_OPT_SEARCH_CHILDREN);
+
+#else
+  // Was written like that in ffmpeg example. 
+  // Probably correct but the av_opt_set_int_list macro is more appropriate
+ 
+  err = av_opt_set_bin(sink_ctx, "pix_fmts",
+                       (uint8_t*)&enc_ctx->pix_fmt,
+                       sizeof(enc_ctx->pix_fmt),
+                       AV_OPT_SEARCH_CHILDREN);
+#endif
+  if (err < 0) {
+    std::cerr << "Failed to set pix_fmts: " << averr(err) << std::endl;;
+    exit(-1);
+  }
+
+  // Create the connections to the filter graph
+  //
+  // The in/out swap is not a mistake:
+  //
+  //   ----------       -----------------------------      --------
+  //   | Source | ----> | in -> filter_graph -> out | ---> | Sink | 
+  //   ----------       -----------------------------      --------
+  //
+  // The 'in' of filter_graph is the output of the Source buffer
+  // The 'out' of filter_graph is the input of the Sink buffer
+  //
+  
+  AVFilterInOut *outputs = avfilter_inout_alloc();
+  outputs->name       = av_strdup("in");
+  outputs->filter_ctx = source_ctx; 
+  outputs->pad_idx    = 0;
+  outputs->next       = NULL;
+  
+  AVFilterInOut *inputs  = avfilter_inout_alloc();
+  inputs->name       = av_strdup("out");
+  inputs->filter_ctx = sink_ctx;
+  inputs->pad_idx    = 0;
+  inputs->next       = NULL;
+  
+  if (!outputs->name || !inputs->name) {
+    std::cerr << "Failed to parse allocate inout filter links" << std::endl ;
+    exit(-1);
+  }
+
+  std::string filter_text = params.video_filter ;
+  if ( filter_text.empty() ) {
+    filter_text = "null" ;     // "null" is the dummy video filter
+  }
+  
+  err = avfilter_graph_parse_ptr(filter_graph,
+                                 filter_text.c_str(),
+                                 &inputs,
+                                 &outputs,
+                                 NULL);
+  if (err < 0) {
+    std::cerr << "Failed to parse graph filter: " << averr(err) << std::endl;;    
+    exit(-1) ;
+  }
+
+  err = avfilter_graph_config(filter_graph, NULL);
+  if (err<0) {
+    std::cerr << "Failed to configure graph filter: " << averr(err) << std::endl;;    
+    exit(-1) ;
+  }
+
+  if (1) {
+    printf("#######################################\n");
+    printf("%s\n",avfilter_graph_dump(filter_graph,0));
+    printf("#######################################\n");
+    printf("nb_inputs = %d\n",sink_ctx->nb_inputs);
+    printf("nb_outputs = %d\n",sink_ctx->nb_outputs);
+    AVFilterLink  * out = sink_ctx->inputs[0] ;
+    printf("    out.w = %d\n",out->w);
+    printf("    out.h = %d\n",out->h);
+    printf("    out.time_base = %d/%d\n", out->time_base.num,out->time_base.den);
+    printf("    out.frame_rate = %d/%d\n", out->frame_rate.num,out->frame_rate.den);    
+  }
+
+
+  this->videoFilterGraph = filter_graph;
+  this->videoFilterSourceCtx = source_ctx;
+  this->videoFilterSinkCtx = sink_ctx;
+  
+  avfilter_inout_free(&inputs);
+  avfilter_inout_free(&outputs);
+
+}
+
 void FrameWriter::init_video_stream()
 {
     AVDictionary *options = NULL;
@@ -151,6 +326,25 @@ void FrameWriter::init_video_stream()
         std::exit(-1);
     }
 
+    init_video_filters(codec);
+
+    // The (input of the) video filter sink is the output of the whole filter.  
+    AVFilterLink * filter_output = this->videoFilterSinkCtx->inputs[0] ;
+    // The 'filtered' values below represent what we are going to feed to
+    // the video stream.
+
+    int        filtered_w = filter_output->w ;
+    int        filtered_h = filter_output->h ;
+    AVRational filtered_sample_aspect_ratio = filter_output->sample_aspect_ratio ;
+
+    // Can a filter change the time_base? Probably not but if 
+    // that happens then we probably need to do something about that. 
+    // AVRational filtered_time_base = filter_output->time_base;   
+
+    // Can we make use of the frame rate if it is set by
+    // some a filter such as 'fps'?    
+    // AVRational filtered_frame_rate = filter_output->frame_rate; // can be 1/0 if unknown
+    
     videoStream = avformat_new_stream(fmtCtx, codec);
     if (!videoStream)
     {
@@ -159,9 +353,17 @@ void FrameWriter::init_video_stream()
     }
 
     videoCodecCtx = videoStream->codec;
-    videoCodecCtx->width = params.width;
-    videoCodecCtx->height = params.height;
-    videoCodecCtx->time_base = US_RATIONAL ;
+    
+#if 1
+    videoCodecCtx->width      = filtered_w ;
+    videoCodecCtx->height     = filtered_h ;
+    videoCodecCtx->time_base  = US_RATIONAL ;
+    videoCodecCtx->sample_aspect_ratio = filtered_sample_aspect_ratio;
+#else
+    videoCodecCtx->width      = params.width;
+    videoCodecCtx->height     = params.height;
+    videoCodecCtx->time_base  = US_RATIONAL ;
+#endif
     
     if (params.codec.find("vaapi") != std::string::npos)
     {
@@ -341,6 +543,7 @@ FrameWriter::FrameWriter(const FrameWriterParams& _params) :
 
     init_codecs();
 
+#if 0
     encoder_frame = av_frame_alloc();
     if (hw_device_context && params.to_yuv) {
         encoder_frame->format = AV_PIX_FMT_NV12;
@@ -372,10 +575,96 @@ FrameWriter::FrameWriter(const FrameWriterParams& _params) :
             std::exit(-1);
         }
     }
+#endif
 }
 
 void FrameWriter::add_frame(const uint8_t* pixels, int64_t usec, bool y_invert)
 {
+#if 1
+  // Ignore y_invert! Can easily be done with a filter
+
+  int err;
+
+  // Create a frame for the pixels
+  AVFrame * frame = av_frame_alloc();
+
+  frame->width       = params.width;
+  frame->height      = params.height;
+  frame->format      = get_input_format(); // a 32 bit RGBx pixel format
+  frame->data[0]     = (uint8_t*) pixels;
+  frame->linesize[0] = 4*params.width;
+  frame->pts         = usec;  // because our time_base is US_RATIONAL
+
+  // Is that needed? That makes sense for a RGB 'screencast'
+  // but the documentation says that this is about the 'YUV range'
+  // so this is probably ignored.
+  if (false) av_frame_set_color_range(frame,AVCOL_RANGE_JPEG);
+  
+
+  // Push the RGB frame into the filtergraph */
+  err = av_buffersrc_add_frame_flags(videoFilterSourceCtx, frame, 0);
+  if (err < 0) {
+    std::cerr << "Error while feeding the filtergraph\n";
+    exit (-1);  
+  }
+
+  // Pull filtered frames from the filtergraph 
+  while (true) {
+
+    AVFrame *filtered_frame = av_frame_alloc();
+
+    if (!filtered_frame) {
+      std::cerr << "Error av_frame_alloc\n";
+      exit (-1);  
+    }
+    
+    err = av_buffersink_get_frame(videoFilterSinkCtx, filtered_frame);
+    if (err==AVERROR(EAGAIN)) {
+      // Not an error. No frame available.
+      // Try again later.
+      break;
+    } else if (err==AVERROR_EOF) {
+      // There will be no more output frames on this sink.
+      // That could happen if a filter like 'trim' is used to
+      // stop after a given time. 
+      // If that happen, we need to inform the application
+      // and it should (1) stop sending frames and (2) flush
+      // the encoder.
+      // TO BE TESTED
+      std::cerr << "Got EOF in av_buffersink_get_frame\n";
+      break;
+    } else if (err<0) {
+      av_frame_free(&filtered_frame);
+      std::cerr << "Error in av_buffersink_get_frame\n";
+      exit(-1);
+    } 
+      
+
+    // TODO: Is that necessary? This is done in the
+    //       ffmpeg transcoding example but their input
+    //       frames are produced by a decoder and so may
+    //       have additional flags set. 
+    filtered_frame->pict_type = AV_PICTURE_TYPE_NONE;
+
+    // So we have a frame. Encode it!
+    
+    AVPacket pkt;
+    av_init_packet(&pkt);
+    pkt.data = NULL;
+    pkt.size = 0;
+
+    int got_output;
+    avcodec_encode_video2(videoCodecCtx, &pkt, filtered_frame, &got_output);
+
+    if (got_output)
+      finish_frame(pkt, true);
+    
+  }
+  
+  av_frame_free(&frame);    
+  
+    
+#else
     /* Calculate data after y-inversion */
     int stride[] = {int(4 * params.width)};
     const uint8_t *formatted_pixels = pixels;
@@ -438,6 +727,7 @@ void FrameWriter::add_frame(const uint8_t* pixels, int64_t usec, bool y_invert)
 
     if (got_output)
       finish_frame(pkt, true);
+#endif
 }
 
 #define SRC_RATE 1e6
@@ -509,7 +799,9 @@ void FrameWriter::finish_frame(AVPacket& pkt, bool is_video)
     if (is_video)
     {
         // TODO: We use videoCodecCtx->time_base instead of US_RATIONAL                        
-        av_packet_rescale_ts(&pkt, US_RATIONAL, videoStream->time_base);
+        //        av_packet_rescale_ts(&pkt, US_RATIONAL, videoStream->time_base);
+      AVRational &packet_time_base = this->videoFilterSinkCtx->inputs[0]->time_base;
+        av_packet_rescale_ts(&pkt, packet_time_base, videoStream->time_base);
         pkt.stream_index = videoStream->index;
     } else
     {
@@ -540,9 +832,12 @@ FrameWriter::~FrameWriter()
     AVPacket pkt;
     av_init_packet(&pkt);
 
+
+    // TODO: Should also flush the filter graph but that 
+    //       should be ione for now. 
     for (int got_output = 1; got_output;)
     {
-        avcodec_encode_video2(videoCodecCtx, &pkt, NULL, &got_output);
+      avcodec_encode_video2(videoCodecCtx, &pkt, NULL, &got_output);
         if (got_output)
             finish_frame(pkt, true);
     }

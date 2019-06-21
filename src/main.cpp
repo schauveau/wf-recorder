@@ -507,13 +507,14 @@ int main(int argc, char *argv[])
         { "log",             no_argument,       NULL, 'l' },
         { "audio",           optional_argument, NULL, 'a' },
         { "to-yuv",          no_argument,       NULL, 't' },
+        { "filter",          required_argument, NULL, 'F' },
         { 0,                 0,                 NULL,  0  }
     };
 
     int c, i;
     std::string param;
     size_t pos;
-    while((c = getopt_long(argc, argv, "o:f:g:c:p:d:la::t::", opts, &i)) != -1)
+    while((c = getopt_long(argc, argv, "o:f:g:c:p:d:la::t::F:", opts, &i)) != -1)
     {
         switch(c)
         {
@@ -550,6 +551,10 @@ int main(int argc, char *argv[])
                 params.to_yuv = true;
                 break;
 
+            case 'F':
+                params.video_filter = optarg;
+                break;
+                
             case 'p':
                 param = optarg;
                 pos = param.find("=");

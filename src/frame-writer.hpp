@@ -19,9 +19,12 @@ extern "C"
     #include <libavutil/mathematics.h>
     #include <libavformat/avformat.h>
     #include <libavfilter/avfilter.h>
+    #include <libavfilter/buffersink.h>
+    #include <libavfilter/buffersrc.h>
     #include <libavutil/pixdesc.h>
     #include <libavutil/hwcontext.h>
     #include <libavutil/opt.h>
+  
 }
 
 enum InputFormat
@@ -41,8 +44,10 @@ struct FrameWriterParams
     std::string video_filter;
   
     std::string codec;
-    std::string hw_device; // used only if codec contains vaapi
     std::map<std::string, std::string> codec_options;
+
+    std::string hw_method; // If not empty then the HW method to used (e.g. "vaapi")
+    std::string hw_device; // Device description needed by some HW methods.
 
     int64_t audio_sync_offset;
 
@@ -63,9 +68,9 @@ class FrameWriter
     AVCodecContext* videoCodecCtx;
     AVFormatContext* fmtCtx;
 
-    AVFilterContext * bufferSrcCtx = NULL;
-    AVFilterContext * bufferSinkCtx = NULL;
-    AVFilterGraph   * filterGraph = NULL;
+    AVFilterContext * videoFilterSourceCtx = NULL;
+    AVFilterContext * videoFilterSinkCtx = NULL;
+    AVFilterGraph   * videoFilterGraph = NULL;
  
     AVBufferRef *hw_device_context = NULL;
     AVBufferRef *hw_frame_context = NULL;
@@ -75,6 +80,7 @@ class FrameWriter
     void init_hw_accel();
     void init_sws(AVPixelFormat format);
     void init_codecs();
+    void init_video_filters(AVCodec *codec);
     void init_video_stream();
 
     AVFrame *encoder_frame = NULL;
