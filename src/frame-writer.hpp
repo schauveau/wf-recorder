@@ -54,6 +54,7 @@ struct FrameWriterParams
     bool enable_audio;
     bool enable_ffmpeg_debug_output;
 
+    bool trace_video_progress; 
     bool to_yuv;
 };
 
@@ -71,7 +72,17 @@ class FrameWriter
     AVFilterContext * videoFilterSourceCtx = NULL;
     AVFilterContext * videoFilterSinkCtx = NULL;
     AVFilterGraph   * videoFilterGraph = NULL;
- 
+
+    // Properties of the video filter output.
+    struct {
+      int width;
+      int height;
+      AVRational sar;  // sample aspect ratio
+      AVPixelFormat pix_fmt; 
+      AVRational time_base;
+      AVRational frame_rate; // can be 1/0 if unknown
+    } vfilter ;
+  
     AVBufferRef *hw_device_context = NULL;
     AVBufferRef *hw_frame_context = NULL;
 

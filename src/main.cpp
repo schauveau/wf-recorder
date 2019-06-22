@@ -1,6 +1,8 @@
 #define _XOPEN_SOURCE 700
 #define _POSIX_C_SOURCE 199309L
 #include <iostream>
+#include <iomanip>
+#include <sstream>
 
 #include <string>
 #include <thread>
@@ -23,6 +25,24 @@
 #include "xdg-output-unstable-v1-client-protocol.h"
 
 #include "config.h"
+
+// Known mapping between encoder names and hwaccel method
+std::map<std::string,std::string> auto_hwaccel =
+  {
+   { "h264_vaapi",  "vaapi" },
+   { "mpeg2_vaapi", "vaapi" },
+   { "hevc_vaapi",  "vaapi" },
+   { "mjpeg_vaapi", "vaapi" },
+   { "vp8_vaapi",   "vaapi" },
+   { "vp9_vaapi",   "vaapi" }
+   };
+
+// Default filters for some hwaccel methods
+std::map<std::string,std::string> auto_hw_filter =
+  {
+   //   { "vaapi" , "format=nv12,hwupload" }  
+   { "vaapi" , "hwupload" }  
+  }; 
 
 std::mutex frame_writer_mutex, frame_writer_pending_mutex;
 std::unique_ptr<FrameWriter> frame_writer;
@@ -481,15 +501,255 @@ static wf_recorder_output* detect_output_from_region(const capture_region& regio
     return nullptr;
 }
 
+// One enums for each command line argument.
+// Alphanumerical values indicate a short option.
+// Other values are long options only
+
+// LONGARG is a unique identifier for arguments without a short name. 
+#define LONGARG  (-__LINE__)
+
+static const int ARG_HELP           = 'h';
+static const int ARG_SCREEN         = 's';
+static const int ARG_FILE           = 'f';  
+static const int ARG_GEOMETRY       = 'g';
+static const int ARG_OUTPUT         = 'o';
+static const int ARG_ENCODER        = 'e';
+static const int ARG_ENCODER_PARAM  = 'p';  // encoder parameter
+static const int ARG_HW_DEVICE      = 'd';
+static const int ARG_HW_ACCEL       = LONGARG ;
+static const int ARG_AUDIO          = 'a';
+static const int ARG_HIDE_MOUSE     = 'M';
+static const int ARG_SHOW_MOUSE     = 'm';
+static const int ARG_YUV420P        = 'y';
+static const int ARG_VIDEO_FILTER   = 'v'; 
+static const int ARG_VIDEO_TRACE    = 'T'; 
+static const int ARG_FFMPEG_DEBUG   = LONGARG ;
+static const int ARG_VAAPI          = LONGARG ;
+      
+
+static struct option options[] =
+  {
+   { "help",            no_argument      , NULL, ARG_HELP },
+   { "screen",          required_argument, NULL, ARG_SCREEN },
+   { "output",          required_argument, NULL, ARG_OUTPUT },
+   { "file",            required_argument, NULL, ARG_FILE },
+   { "geometry",        required_argument, NULL, ARG_GEOMETRY },
+   { "encoder",         required_argument, NULL, ARG_ENCODER },
+   { "hide-mouse",      no_argument,       NULL, ARG_HIDE_MOUSE },
+   { "show-mouse",      no_argument,       NULL, ARG_SHOW_MOUSE },
+   { "param",           required_argument, NULL, ARG_ENCODER_PARAM },
+   { "hw-device",       required_argument, NULL, ARG_HW_DEVICE },
+   { "hw-accel",        required_argument, NULL, ARG_HW_ACCEL },
+   { "ffmeg-debug",     no_argument,       NULL, ARG_FFMPEG_DEBUG },
+   { "audio",           optional_argument, NULL, ARG_AUDIO },
+   { "yuv420p",         no_argument,       NULL, ARG_YUV420P},   
+   { "video-filter",    required_argument, NULL, ARG_VIDEO_FILTER},
+   { "video-trace",     no_argument,       NULL, ARG_VIDEO_TRACE },   
+   { "vaapi",           no_argument,       NULL, ARG_VAAPI },   
+   { 0,                 0,                 NULL,  0  }
+  };
+
+static const char * default_filename = "recording.mp4" ;
+
+static bool is_alphanum(int v) {
+  return
+       ( 'a' <= v && v <= 'z' )
+    || ( 'A' <= v && v <= 'Z' )
+    || ( '0' <= v && v <= '9' )
+    ;
+}
+
+const char *long_name(int arg) {
+  int k=0;
+  while (true) {
+    struct option & entry = options[k++] ;
+    if ( entry.name==0 && entry.has_arg==0 && entry.flag==0 && entry.val==0) {
+      break;
+    }
+    if ( entry.val==arg ) {
+      return entry.name;
+    }
+ }
+ return "????";
+}
+
+// Transforms the options array into a suitable 'optstring' for getopt_long.
+static char * gen_optstring() {
+  std::stringstream s ;
+  int k=0 ;
+  while (true) {
+    struct option & entry = options[k++] ;
+    if ( entry.name==0 && entry.has_arg==0 && entry.flag==0 && entry.val==0) {
+      return strdup(s.str().c_str());
+    }
+    if ( is_alphanum(entry.val) ) {
+      s << char(entry.val);
+      if (entry.has_arg==no_argument) {      
+      } else if (entry.has_arg==required_argument) {
+        s << ':' ;
+      } else if (entry.has_arg==optional_argument) {
+        s << ':' << ':' ;
+      } else {
+        abort(); 
+      }
+    }
+  }
+  
+}
+
+static void show_usage(std::ostream &out, const char *app)
+{
+  out << "Usage: " << app << "[options] [-f output.mp4]" << std::endl;
+  int k=0 ; 
+  std::string indent(35,' ');
+  while (true) {
+    struct option & entry = options[k++] ;
+    if ( entry.name==0 && entry.has_arg==0 && entry.flag==0 && entry.val==0)
+      break ;
+    bool hide=false;
+    std::string argname("ARG");
+    std::stringstream text;
+    switch (entry.val) {
+    case ARG_HELP:
+      text  << "Show this help" ;
+      break;
+    case ARG_SCREEN:
+      argname = "SCREEN";
+      text << "Specify the output to use. SCREEN is the" << std::endl << indent ;
+      text << "Wayland output number or identifier.";
+      break;
+    case ARG_OUTPUT:
+      argname = "FILENAME";
+      text << "Similar to --" << long_name(ARG_FILE) << " but the FILENAME is formatted" << std::endl << indent;
+      text << "as described for the 'date' command. For example:" << std::endl << indent;
+      text << "    --" << long_name(ARG_OUTPUT) << " screencast-%F-%Hh%Mm%Ss.mp4";
+      break;
+    case ARG_FILE:
+      argname = "FILENAME";
+      text << "Set the name of the output file. The default" << std::endl << indent;
+      text << "is " << default_filename  ;
+      break;
+    case ARG_GEOMETRY:
+      argname = "REGION";
+      text << "Specify a REGION on screen using the 'X,Y WxH' format" << std::endl << indent;
+      text << "compatible with 'slurp'"; 
+      break;
+    case ARG_ENCODER:
+      argname = "ENCODER";
+      text << "Specify the FFMpeg encoder codec to use. " << std::endl << indent; 
+      text << "The default is '" << DEFAULT_CODEC << "'." << std::endl << indent;
+      text << "See also: ffmpeg -hide_banner -encoders" ;
+      break;
+    case ARG_HW_DEVICE:
+      argname = "DEVICE";
+      text << "Specify the hardware decoding device." << std::endl << indent; 
+      text << "This is only relevant if an hardware encoder" << std::endl << indent; 
+      text << "is selected. For VAAPI encoders, that would " << std::endl << indent; 
+      text << "be something like /dev/dri/renderD128";
+      break;
+    case ARG_HW_ACCEL:
+      argname = "NAME";
+      text << "Select an hardware accelerator." << std::endl << indent; 
+      text << "See also: ffmpeg -hide_banner -hwaccels" ;
+      break;
+    case ARG_FFMPEG_DEBUG:
+      text << "Enable FFMpeg debug output";
+      break;
+    case ARG_ENCODER_PARAM:
+      argname = "NAME=VALUE";      
+      text << "Set an encoder codec parameter" << std::endl << indent; 
+      text << "See also: ffmpeg -hide_banner -h encoder=...";
+      break;
+    case ARG_HIDE_MOUSE:
+      text << "Do not show the mouse cursor in the recording";
+      break;
+    case ARG_SHOW_MOUSE:
+      text << "Show the mouse cursor in the recording. This is the default.";
+      break;
+    case ARG_AUDIO:
+      argname = "DEVICE";
+      text << "Enable audio recordig using the specified Pulseaudio" << std::endl << indent ;      
+      text << "device number or identifier";
+      break;
+    case ARG_YUV420P:
+      text << "Use the encoding pixel format YUV210P if possible" << std::endl << indent; 
+      text << "That option is mostly intended for software encoders."<< std::endl << indent ;
+      text << "For hardware encorders, the pixel format is usually set"<< std::endl << indent;
+      text << "using a filter";      
+      break;
+    case ARG_VIDEO_FILTER:
+      argname = "FILTERS";
+      text << "Specify the FFMpeg video filters.";
+      break;
+    case ARG_VIDEO_TRACE: 
+      // hide = true ;
+      text << "Trace progress of video encoding";
+      break;
+    case ARG_VAAPI:
+      text << "Alias for --" << long_name(ARG_HW_ACCEL) << "=vaapi" ;
+      break;
+    default:
+      text << "TO BE DOCUMENTED" ;
+      break;
+    }
+    if (hide)
+      continue ;
+    std::stringstream header; 
+    const char *sep="" ;
+    if ( is_alphanum(entry.val) ) {
+      // Assume that values in the character range are
+      // also used for a short argument
+      header << "  -" << char(entry.val) ;
+      sep=", ";
+    } else {
+      header << "    ";
+      sep="  ";
+    }
+    if (entry.name) {
+      header << sep << "--" << entry.name ;
+    }
+    if (entry.has_arg==no_argument) {
+      // done
+    } else if (entry.has_arg==required_argument) {
+      header << (entry.name?'=':' ')  << argname ;
+    } else if (entry.has_arg==optional_argument) {
+      if (entry.name)
+        header << "[=" << argname << "]";
+      else
+        header << "[" << argname << "]";
+    } else {
+      abort(); 
+    }
+    
+    out << std::setw(indent.size()) << std::left << header.str() <<  text.str() << std::endl ; 
+  }
+}
+
+std::string time_format(const char *fmt)
+{
+  char buffer[PATH_MAX];
+  struct timeval tv;
+  gettimeofday (&tv, NULL);
+  struct tm *ptm = localtime(&tv.tv_sec);
+  int n = strftime(buffer, sizeof(buffer), fmt, ptm);
+  if (n==0) {
+    fprintf(stderr,"Failed to perform time format\n");
+    exit(1);
+  }
+  return buffer;
+}
+
 int main(int argc, char *argv[])
 {
+    bool show_cursor = true ;
     FrameWriterParams params;
-    params.file = "recording.mp4";
+    params.file = default_filename;
     params.codec = DEFAULT_CODEC;
     params.enable_ffmpeg_debug_output = false;
     params.enable_audio = false;
     params.to_yuv = false;
-
+    params.trace_video_progress=false;
+    
     PulseReaderParams pulseParams;
 
     constexpr const char* default_cmdline_output = "interactive";
@@ -497,83 +757,137 @@ int main(int argc, char *argv[])
 
     capture_region selected_region{};
 
-    struct option opts[] = {
-        { "output",          required_argument, NULL, 'o' },
-        { "file",            required_argument, NULL, 'f' },
-        { "geometry",        required_argument, NULL, 'g' },
-        { "codec",           required_argument, NULL, 'c' },
-        { "codec-param",     required_argument, NULL, 'p' },
-        { "device",          required_argument, NULL, 'd' },
-        { "log",             no_argument,       NULL, 'l' },
-        { "audio",           optional_argument, NULL, 'a' },
-        { "to-yuv",          no_argument,       NULL, 't' },
-        { "filter",          required_argument, NULL, 'F' },
-        { 0,                 0,                 NULL,  0  }
-    };
-
     int c, i;
     std::string param;
     size_t pos;
-    while((c = getopt_long(argc, argv, "o:f:g:c:p:d:la::t::F:", opts, &i)) != -1)
+    const char *optstring = gen_optstring();
+    //  std::cerr << "optstring = " << optstring << "\n";    
+    while((c = getopt_long(argc, argv, optstring, options, &i)) != -1)
     {
         switch(c)
         {
-            case 'f':
+            case ARG_HELP:
+              show_usage(std::cerr, argv[0]);
+                return EXIT_FAILURE;
+                
+            case ARG_OUTPUT:
+              {
+                params.file = time_format(optarg);
+              }
+              break ;
+              
+            case ARG_FILE:
                 params.file = optarg;
                 break;
 
-            case 'o':
+            case ARG_SCREEN:
                 cmdline_output = optarg;
                 break;
 
-            case 'g':
+            case ARG_GEOMETRY:
                 selected_region.set_from_string(optarg);
                 break;
 
-            case 'c':
+            case ARG_ENCODER:
                 params.codec = optarg;
                 break;
 
-            case 'd':
+            case ARG_HW_ACCEL:
+                params.hw_method = optarg;
+                break;
+
+            case ARG_HW_DEVICE:
                 params.hw_device = optarg;
                 break;
 
-            case 'l':
+            case ARG_FFMPEG_DEBUG:
                 params.enable_ffmpeg_debug_output = true;
                 break;
 
-            case 'a':
+            case ARG_AUDIO:
                 params.enable_audio = true;
                 pulseParams.audio_source = optarg ? strdup(optarg) : NULL;
                 break;
 
-            case 't':
+            case ARG_YUV420P:
                 params.to_yuv = true;
                 break;
 
-            case 'F':
+            case ARG_VIDEO_FILTER:
                 params.video_filter = optarg;
                 break;
                 
-            case 'p':
+            case ARG_ENCODER_PARAM:
                 param = optarg;
                 pos = param.find("=");
                 if (pos != std::string::npos && pos != param.length() - 1)
                 {
-                    auto optname = param.substr(0, pos);
-                    auto optvalue = param.substr(pos + 1, param.length() - pos - 1);
-                    params.codec_options[optname] = optvalue;
+                  auto optname = param.substr(0, pos);
+                  auto optvalue = param.substr(pos + 1, param.length() - pos - 1);
+                  params.codec_options[optname] = optvalue;
                 } else
                 {
-                    printf("Invalid codec option %s\n", optarg);
+                  fprintf(stderr,"Malformed encoder option '%s' (expect 'NAME=VALUE')\n", optarg);
+                  exit(1);
                 }
                 break;
 
+           case ARG_VIDEO_TRACE:
+                params.trace_video_progress=true;
+                break; 
+
+           case ARG_VAAPI:
+                params.hw_method = "vaapi";
+                break;
+
+           case ARG_SHOW_MOUSE:
+                show_cursor = true;
+                break;
+
+           case ARG_HIDE_MOUSE:
+                show_cursor = false;
+                break;
+                
             default:
-                printf("Unsupported command line argument %s\n", optarg);
+                printf("Non implemented command line option (%s)\n", optarg);
+               return EXIT_FAILURE ;
         }
     }
 
+    // No unprocessed arguments
+    if (optind != argc) {
+      fprintf(stderr,"Unexpected argument '%s'\n",argv[optind]);
+      return EXIT_FAILURE;
+    }
+
+    // Guess the hw_method for some known codecs.
+    if ( params.hw_method.empty() && !params.codec.empty() ) {
+      auto it = auto_hwaccel.find(params.codec) ;
+      if ( it != auto_hwaccel.end() ) {
+        fprintf(stderr, "Using %s for encoder %s\n", it->second.c_str(), params.codec.c_str());
+        params.hw_method = it->second ;
+      }
+    }   
+
+    // Guess a video filter for some hw methods
+    if ( params.video_filter.empty() && !params.hw_method.empty() ) {
+      std::cerr << "GUESSING filter\n";
+      auto it = auto_hw_filter.find(params.hw_method) ;
+      if ( it != auto_hw_filter.end() ) {
+        fprintf(stderr, "Using default filter '%s' for hardware %s\n", it->second.c_str(), params.hw_method.c_str());
+        params.video_filter = it->second ;
+      }
+    }
+    
+    // Sensible default when using vaapi. 
+    if ( params.hw_method == "vaapi" ) {
+      // TODO: find the first render device.
+      if ( params.hw_device.empty() || params.hw_device=="auto" ) {
+        params.hw_device = "/dev/dri/renderD128" ;
+      }
+    }
+
+    
     display = wl_display_connect(NULL);
     if (display == NULL) {
         fprintf(stderr, "failed to create display: %m\n");
@@ -676,11 +990,15 @@ int main(int argc, char *argv[])
         if (!selected_region.is_selected())
         {
             frame = zwlr_screencopy_manager_v1_capture_output(
-                screencopy_manager, 1, chosen_output->output);
+                screencopy_manager,
+                show_cursor ? 1 : 0,
+                chosen_output->output);
         } else
         {
             frame = zwlr_screencopy_manager_v1_capture_output_region(
-                screencopy_manager, 1, chosen_output->output,
+                screencopy_manager,
+                show_cursor ? 1 : 0,
+                chosen_output->output,
                 selected_region.x - chosen_output->x,
                 selected_region.y - chosen_output->y,
                 selected_region.width, selected_region.height);

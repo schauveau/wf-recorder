@@ -10,6 +10,9 @@
 #include <cstring>
 #include "averr.h"
 
+
+#define TRACE 1
+
 // REMARK: Removed FPS=60 because using 1/FPS as time_base
 //         only makes sense if the FPS is the actual framerate
 //         (and it is probably not).
@@ -20,6 +23,11 @@
 // US_RATIONAL = 1us as a AVRational
 
 static const AVRational US_RATIONAL{1,1000000} ;
+
+inline std::ostream & operator<<(std::ostream &out, AVRational r) {
+  out << r.num << '/' << r.den ;
+  return out;
+}
 
 #define AUDIO_RATE 44100
 
@@ -108,9 +116,9 @@ void FrameWriter::init_hw_accel()
 void FrameWriter::load_codec_options(AVDictionary **dict)
 {
     static const std::map<std::string, std::string> default_x264_options = {
-        {"tune", "zerolatency"},
-        {"preset", "ultrafast"},
-        {"crf", "20"},
+         {"tune", "zerolatency"},
+         {"preset", "ultrafast"},
+         {"crf", "20"},
     };
 
     if (params.codec.find("libx264") != std::string::npos ||
@@ -220,21 +228,41 @@ void FrameWriter::init_video_filters(AVCodec *codec)
     exit(-1);
   }
 
-  // Indicate which pixel formats are accepted by our codec. 
+  // We also need to tell the sink which pixel formats are supported.
+  // by the video encoder. codevIndicate to our sink  pixel formats
+  // are accepted by our codec. 
+
+  if (true) {
+    std::cerr << "Available encoding pixel formats: ";
+    for ( auto *p = codec->pix_fmts ; *p != AV_PIX_FMT_NONE ; p++) {
+      if (p!=codec->pix_fmts)
+        std::cerr <<",";
+      std::cerr << av_get_pix_fmt_name(*p) ;
+    }
+    std::cerr << "\n";
+  }
+
+  const AVPixelFormat *supported_pix_fmts = codec->pix_fmts;
+  static const AVPixelFormat only_yuv420p[] =
+    {
+     AV_PIX_FMT_YUV420P,
+     AV_PIX_FMT_NONE
+    } ;
+
+  // Force the pixel format to yuv420p on user request (-to-yuv)
+  // but only if the codec supports that value.
+  // TODO: An option to select any pixel format would be nice.
+  if ( params.to_yuv ) { 
+    if ( is_fmt_supported(AV_PIX_FMT_YUV420P, supported_pix_fmts) ) {
+      supported_pix_fmts = only_yuv420p ;
+    } else {
+      std::cerr << "Ignoring request to force yuv420p.\n";
+    }
+  }
   
-#if 1 
-  err = av_opt_set_int_list(sink_ctx, "pix_fmts", codec->pix_fmts,
+  err = av_opt_set_int_list(sink_ctx, "pix_fmts", supported_pix_fmts,
                             AV_PIX_FMT_NONE, AV_OPT_SEARCH_CHILDREN);
 
-#else
-  // Was written like that in ffmpeg example. 
-  // Probably correct but the av_opt_set_int_list macro is more appropriate
- 
-  err = av_opt_set_bin(sink_ctx, "pix_fmts",
-                       (uint8_t*)&enc_ctx->pix_fmt,
-                       sizeof(enc_ctx->pix_fmt),
-                       AV_OPT_SEARCH_CHILDREN);
-#endif
   if (err < 0) {
     std::cerr << "Failed to set pix_fmts: " << averr(err) << std::endl;;
     exit(-1);
@@ -273,7 +301,8 @@ void FrameWriter::init_video_filters(AVCodec *codec)
   if ( filter_text.empty() ) {
     filter_text = "null" ;     // "null" is the dummy video filter
   }
-  
+  std::cerr << "Using video filter: " << filter_text << std::endl;;    
+
   err = avfilter_graph_parse_ptr(filter_graph,
                                  filter_text.c_str(),
                                  &inputs,
@@ -283,7 +312,25 @@ void FrameWriter::init_video_filters(AVCodec *codec)
     std::cerr << "Failed to parse graph filter: " << averr(err) << std::endl;;    
     exit(-1) ;
   }
+  
 
+  // Filters that create HW frames ('hwupload', 'hwmap', ...) need
+  // AVBufferRef in their hw_device_ctx. Unfortunately, there is no
+  // simple API to do that for filters created by avfilter_graph_parse_ptr().
+  // The code below is inspired from ffmpeg_filter.c
+  if (this->hw_device_context) {
+    std::cerr << "SET HW_DEVICE IN GRPH\n";
+    for (unsigned i=0; i<filter_graph->nb_filters; i++) {
+      filter_graph->filters[i]->hw_device_ctx = av_buffer_ref(this->hw_device_context);
+      if (!filter_graph->filters[i]->hw_device_ctx) {
+        std::cerr << "Failed to create ref to HW context\n";
+        exit(-1);
+      }
+    }
+  }
+
+
+  
   err = avfilter_graph_config(filter_graph, NULL);
   if (err<0) {
     std::cerr << "Failed to configure graph filter: " << averr(err) << std::endl;;    
@@ -291,19 +338,35 @@ void FrameWriter::init_video_filters(AVCodec *codec)
   }
 
   if (1) {
-    printf("#######################################\n");
-    printf("%s\n",avfilter_graph_dump(filter_graph,0));
-    printf("#######################################\n");
-    printf("nb_inputs = %d\n",sink_ctx->nb_inputs);
-    printf("nb_outputs = %d\n",sink_ctx->nb_outputs);
-    AVFilterLink  * out = sink_ctx->inputs[0] ;
-    printf("    out.w = %d\n",out->w);
-    printf("    out.h = %d\n",out->h);
-    printf("    out.time_base = %d/%d\n", out->time_base.num,out->time_base.den);
-    printf("    out.frame_rate = %d/%d\n", out->frame_rate.num,out->frame_rate.den);    
+    std::cout << std::string(80,'#') << std::endl ;
+    std::cout << avfilter_graph_dump(filter_graph,0) << "\n";
+    std::cout << std::string(80,'#') << std::endl ;     
   }
 
+  
+  // The (input of the) sink is the output of the whole filter.  
+  AVFilterLink * filter_output = sink_ctx->inputs[0] ;
+  
+  this->vfilter.width  = filter_output->w ;
+  this->vfilter.height = filter_output->h ;
+  this->vfilter.sar    = filter_output->sample_aspect_ratio ; 
+  this->vfilter.pix_fmt = (AVPixelFormat) filter_output->format ;
+  this->vfilter.time_base = filter_output->time_base;
+  this->vfilter.frame_rate = filter_output->frame_rate; // can be 1/0 if unknown
 
+  this->hw_frame_context = av_buffersink_get_hw_frames_ctx(sink_ctx); 
+    
+  std::cerr << "Encoding input format:"
+            << " w=" << this->vfilter.width
+            << " h=" << this->vfilter.height
+            << " pixfmt=" << av_get_pix_fmt_name(this->vfilter.pix_fmt)
+            << " sample_aspect_ratio=" << this->vfilter.sar
+            << " time_base" << this->vfilter.time_base
+            << " frame_rate" << this->vfilter.time_base
+            << "\n";
+    ;
+      
+  // TODO: free the graph in destructor
   this->videoFilterGraph = filter_graph;
   this->videoFilterSourceCtx = source_ctx;
   this->videoFilterSinkCtx = sink_ctx;
@@ -317,33 +380,17 @@ void FrameWriter::init_video_stream()
 {
     AVDictionary *options = NULL;
     load_codec_options(&options);
-
-    // ===================
+    init_hw_accel();
+    
+    std::cerr << "Using encoder '" << params.codec.c_str() << "'" << std::endl;
     AVCodec* codec = avcodec_find_encoder_by_name(params.codec.c_str());
     if (!codec)
     {
-        std::cerr << "Failed to find the given codec: " << params.codec << std::endl;
+        std::cerr << "Failed to find the specified encoder: " << params.codec << std::endl;
         std::exit(-1);
     }
 
     init_video_filters(codec);
-
-    // The (input of the) video filter sink is the output of the whole filter.  
-    AVFilterLink * filter_output = this->videoFilterSinkCtx->inputs[0] ;
-    // The 'filtered' values below represent what we are going to feed to
-    // the video stream.
-
-    int        filtered_w = filter_output->w ;
-    int        filtered_h = filter_output->h ;
-    AVRational filtered_sample_aspect_ratio = filter_output->sample_aspect_ratio ;
-
-    // Can a filter change the time_base? Probably not but if 
-    // that happens then we probably need to do something about that. 
-    // AVRational filtered_time_base = filter_output->time_base;   
-
-    // Can we make use of the frame rate if it is set by
-    // some a filter such as 'fps'?    
-    // AVRational filtered_frame_rate = filter_output->frame_rate; // can be 1/0 if unknown
     
     videoStream = avformat_new_stream(fmtCtx, codec);
     if (!videoStream)
@@ -352,19 +399,40 @@ void FrameWriter::init_video_stream()
         std::exit(-1);
     }
 
-    videoCodecCtx = videoStream->codec;
+    videoCodecCtx = videoStream->codec;   
     
 #if 1
-    videoCodecCtx->width      = filtered_w ;
-    videoCodecCtx->height     = filtered_h ;
-    videoCodecCtx->time_base  = US_RATIONAL ;
-    videoCodecCtx->sample_aspect_ratio = filtered_sample_aspect_ratio;
+    videoCodecCtx->width      = vfilter.width;
+    videoCodecCtx->height     = vfilter.height;
+    videoCodecCtx->time_base  = vfilter.time_base; // may be changed by avcodec_open2
+    videoCodecCtx->sample_aspect_ratio = vfilter.sar ;
+
+    // Note: since out input if RGB, FFMpeg will usually select
+    // YUV444p over the more common but less accurate YUV420p.
+    // Can be changed by a 'format=yuv420p' filter or by
+    // the --to-yuv option.
+    // Remark: Setting 
+    videoCodecCtx->pix_fmt    = vfilter.pix_fmt ;
+
+    
+    
+    std::cerr << "Selected encoding pixel format = "
+              << av_get_pix_fmt_name(videoCodecCtx->pix_fmt) << std::endl;
+
+    // Does it matter?   
+    videoCodecCtx->framerate = vfilter.frame_rate ;
+
+    if ( this->hw_frame_context ) {
+      videoCodecCtx->hw_frames_ctx = av_buffer_ref(this->hw_frame_context);
+    }
+    
 #else
     videoCodecCtx->width      = params.width;
     videoCodecCtx->height     = params.height;
     videoCodecCtx->time_base  = US_RATIONAL ;
 #endif
-    
+
+#if 0
     if (params.codec.find("vaapi") != std::string::npos)
     {
         videoCodecCtx->pix_fmt = AV_PIX_FMT_VAAPI;
@@ -379,9 +447,10 @@ void FrameWriter::init_video_stream()
             av_get_pix_fmt_name(videoCodecCtx->pix_fmt) << std::endl;
         init_sws(videoCodecCtx->pix_fmt);
     }
-
+#endif
+    
     if (fmtCtx->oformat->flags & AVFMT_GLOBALHEADER)
-        videoCodecCtx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+      videoCodecCtx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 
     int err;
     if ((err = avcodec_open2(videoCodecCtx, codec, &options)) < 0)
@@ -582,12 +651,11 @@ void FrameWriter::add_frame(const uint8_t* pixels, int64_t usec, bool y_invert)
 {
 #if 1
   // Ignore y_invert! Can easily be done with a filter
-
+  if (params.trace_video_progress) std::cerr << "TRACE: received input frame\n";
   int err;
 
   // Create a frame for the pixels
   AVFrame * frame = av_frame_alloc();
-
   frame->width       = params.width;
   frame->height      = params.height;
   frame->format      = get_input_format(); // a 32 bit RGBx pixel format
@@ -595,12 +663,21 @@ void FrameWriter::add_frame(const uint8_t* pixels, int64_t usec, bool y_invert)
   frame->linesize[0] = 4*params.width;
   frame->pts         = usec;  // because our time_base is US_RATIONAL
 
+  if (y_invert) {
+    // Do a cheap vflip using pointer manipulations.
+    // Remark: This is also how the 'vflip' filter is operating
+    //         but we cannot use 'vflip' because that invertion
+    //         is not requested on-the-fly
+    frame->data[0] += frame->linesize[0] * (frame->height-1);
+    frame->linesize[0] = -frame->linesize[0];
+  }
+
+  
   // Is that needed? That makes sense for a RGB 'screencast'
   // but the documentation says that this is about the 'YUV range'
   // so this is probably ignored.
   if (false) av_frame_set_color_range(frame,AVCOL_RANGE_JPEG);
   
-
   // Push the RGB frame into the filtergraph */
   err = av_buffersrc_add_frame_flags(videoFilterSourceCtx, frame, 0);
   if (err < 0) {
@@ -617,7 +694,6 @@ void FrameWriter::add_frame(const uint8_t* pixels, int64_t usec, bool y_invert)
       std::cerr << "Error av_frame_alloc\n";
       exit (-1);  
     }
-    
     err = av_buffersink_get_frame(videoFilterSinkCtx, filtered_frame);
     if (err==AVERROR(EAGAIN)) {
       // Not an error. No frame available.
@@ -639,7 +715,8 @@ void FrameWriter::add_frame(const uint8_t* pixels, int64_t usec, bool y_invert)
       exit(-1);
     } 
       
-
+    if (params.trace_video_progress) std::cerr << "TRACE: received filtered frame\n";
+    
     // TODO: Is that necessary? This is done in the
     //       ffmpeg transcoding example but their input
     //       frames are produced by a decoder and so may
@@ -798,10 +875,8 @@ void FrameWriter::finish_frame(AVPacket& pkt, bool is_video)
 
     if (is_video)
     {
-        // TODO: We use videoCodecCtx->time_base instead of US_RATIONAL                        
-        //        av_packet_rescale_ts(&pkt, US_RATIONAL, videoStream->time_base);
-      AVRational &packet_time_base = this->videoFilterSinkCtx->inputs[0]->time_base;
-        av_packet_rescale_ts(&pkt, packet_time_base, videoStream->time_base);
+      if (params.trace_video_progress) std::cerr << "TRACE: received video packet\n";
+        av_packet_rescale_ts(&pkt, vfilter.time_base, videoStream->time_base);
         pkt.stream_index = videoStream->index;
     } else
     {

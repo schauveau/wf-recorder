@@ -1,5 +1,5 @@
 project(
-	'wf-recorder',
+	'wf-recorder-x',
     'c',
 	'cpp',
 	version: '0.1',
@@ -38,6 +38,6 @@ threads = dependency('threads')
 pulse = dependency('libpulse-simple')
 
 subdir('proto')
-executable('wf-recorder', ['src/frame-writer.cpp', 'src/main.cpp', 'src/pulse.cpp', 'src/averr.c'],
+executable('wf-recorder-x', ['src/frame-writer.cpp', 'src/main.cpp', 'src/pulse.cpp', 'src/averr.c'],
         dependencies: [wayland_client, wayland_protos, libavutil, libavcodec, libavformat, libavfilter, wf_protos, sws, threads, pulse, swr],
         install: true)
