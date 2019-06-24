@@ -16,7 +16,7 @@ ninja -C build
 Optionally configure with `-Ddefault_codec='codec'`. The default is libx264. Now you can just run `./build/wf-recorder-x` or install it with `sudo ninja -C build install`.
 
 # Usage
-In it's simplest form, run `wf-recorder-x` to start recording and use Ctrl+C to stop. This will create a file called recording.mp4 in the current working directory using the default codec.
+In its simplest form, run `wf-recorder-x` to start recording and use Ctrl+C to stop. This will create a file called recording.mp4 in the current working directory using the default codec.
  
 ```
 Usage: ./build/wf-recorder-x[options] [-f output.mp4]
@@ -137,7 +137,7 @@ This is a good alternative to `fps` when you do not care about the exact frame r
 **Note**: In theory, vflip should never be necessary since the vertical orientation is already handled automatically according to the wayland output description. 
 
 
-## drawtext - Draw some text
+## drawtext - Draw text on top of the video
 
 **Example**: Draw the current date and time in the top-left corner during the first 2 seconds. 
 
@@ -145,6 +145,8 @@ This is a good alternative to `fps` when you do not care about the exact frame r
 text=$(date +%c | sed 's/:/\\:/g')
 wf-recorder-x -v "drawtext=enable='between(t,0,2)':text='$text':fontcolor=red:fontsize=20:x=40:y=40-ascent:box=1:boxborderw=4"```
 ```
+
+**Note**: The `enable` options is provided by the [Timeline Editing](https://ffmpeg.org/ffmpeg-filters.html#Timeline-editing) functionnality shared my many filters.
 
 ## eq  - Adjust brightness, contrast, gamma, and saturation.
 
@@ -396,7 +398,7 @@ ff-list-pixel-formats-detailed() { ffprobe  -hide_banner -print_format json  -sh
 ff-video-encoders() { ff-list-encoders | grep -E '^ V' | grep -F '(codec' | cut -c 8- | sort ; }
 ff-video-decoders() { ff-list-encoders | grep -E '^ V' | grep -F '(codec' | cut -c 8- | sort ; }
 # Warning: that one does not show sinks and buffers 
-ff-video-filters() { ff-list-filters  | grep --color=never -F 'V->V' | cut -c 5- ; }
+ff-video-filters() { ff-list-filters  | grep --color=never -F 'V->V' ; }
 
 ff-video-encoders-short() { ff-video-encoders | cut -c -18 ; }
 ff-video-decoders-short() { ff-video-decoders | cut -c -18 ; }
