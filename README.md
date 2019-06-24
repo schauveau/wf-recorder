@@ -1,8 +1,8 @@
 # wf-recorder-x
 
-This is a modified version of [wf-recorder](https://github.com/ammen99/wf-recorder) that uses FFMpeg filters to simplify the implementation of the video encoder. The intent was not and is still not to create an official fork from wl-recorder. 
+This is a modified version of [wf-recorder](https://github.com/ammen99/wf-recorder) that uses FFMpeg filters to simplify the implementation of the video encoder. The intent was not and is still not to create an official fork of wl-recorder.
 
-Be aware that the command line options of wf-recorder-x are significantly different from wf-recorder. Please use the `-h` or `--help` option (that is one of the new features) or read carefully the information below before complaining that it does not work exactly as the original.
+Be aware that the command line options of wf-recorder-x and wf-recorder are significantly different. Please use the `-h` or `--help` option (that is one of the new features) or read carefully the information below before complaining that it does not work exactly as with the original version.
 
 # Installation
 
@@ -157,8 +157,6 @@ wf-recorder-x -v "drawtext=enable='between(t,0,2)':text='$text':fontcolor=red:fo
 ## scale: Scale the input video size and/or convert the image format
 
 **Note**: VAAPI users may want to use scale_vaapi instead.
-
-
 
 # Hardware acceleration
 
