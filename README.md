@@ -103,9 +103,52 @@ Remark: In the previous example, the conversion from RGB to YUV444p is done by t
 
 Do not hesitate to fill a bug report if you have questions or additional information about any hw devices.   
 
-# Interesting Software Video Filter 
+# Terminology
 
-Here is a non-exaustive list of video filters that could be interested to wl-recorder-x users. 
+- Format (or file format)
+
+  > The term (file) format describes the video container. Each format is usually associated to one or more file extension. For example, `mp4` and `webm` are formats.
+
+- Stream
+
+  > A stream is a sequence of packets.
+  > A video file typically contain one video stream and zero and any number of audio and subtitle streams for different languages.
+
+- Packet
+
+  > A block of data that represents the compressed form of a frame.
+
+- Frame
+
+  > A video Frame is basically one image plus some additional metadata (timestamps, colorspace, ...).
+  > An audio frame represents a sound for a short period of time.
+
+- I, P and B-Frames 
+
+  > This is a complex topic that is well explained [here](https://en.wikipedia.org/wiki/Video_compression_picture_types).
+
+- Codec
+
+  > A codec is a standardized way to compress a video or audio stream.
+  > Common video codecs are `h264`, `h265` (hevc), `vp9`, ...    
+
+- Encoders (and Decoders)
+
+  > Those are codec implementations.
+  > For example,`libx264` and `h264_vaapi` are two encoders for the `h264` codec.
+
+- Muxer (or Demuxer)
+
+ > A muxer (or multiplexer) is the piece of code that is responsible from
+ > writing multiple streams into a single file format (and the demuxer does
+ > the opposite).
+ > In FFMpeg, the terms **muxers** and **demuxers** are basically interchangable
+ > with **format**.
+ 
+
+# Interesting Video Filters (for wl-recorder-x users). 
+
+Here is a non-exaustive list of video filters that could be useful. 
 
 For more details, see https://ffmpeg.org/ffmpeg-filters.html#toc-Video-Filters or use `ffmpeg -h filter=xxxx` (where xxxx is the filter name).
 
