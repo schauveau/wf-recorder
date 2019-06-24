@@ -202,7 +202,7 @@ This is a good alternative to `fps` when you do not care about the exact frame r
 
 ```
 text=$(date +%c | sed 's/:/\\:/g')
-wf-recorder-x -v "drawtext=enable='between(t,0,2)':text='$text':fontcolor=red:fontsize=20:x=40:y=40-ascent:box=1:boxborderw=4"```
+wf-recorder-x -v "drawtext=enable='between(t,0,2)':text='$text':fontcolor=red:fontsize=20:x=40:y=40-ascent:box=1:boxborderw=4"
 ```
 
 **Note**: The `enable` options is provided by the [Timeline Editing](https://ffmpeg.org/ffmpeg-filters.html#Timeline-editing) functionnality shared my many filters.
