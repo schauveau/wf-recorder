@@ -103,114 +103,60 @@ Remark: In the previous example, the conversion from RGB to YUV444p is done by t
 
 Do not hesitate to fill a bug report if you have questions or additional information about any hw devices.   
 
-# FFMpeg tips
+# Interesting Software Video Filter 
 
-The ffmpeg and ffprobe commands can provide a lot of information about the FFMpeg capabilities.
+Here is a non-exaustive list of video filters that could be interested to wl-recorder-x users. 
 
-## List all supported video encoders
+For more details, see https://ffmpeg.org/ffmpeg-filters.html#toc-Video-Filters or use `ffmpeg -h filter=xxxx` (where xxxx is the filter name).
 
-Use `ffmpeg -encoders`. You can filter out the non-video encoders (audio, images, ...) as follow:
+## fps - Change the framerate by duplicating or dropping frames. 
 
-```
-(shell) ffmpeg -hide_banner -encoders | grep -E '^ V' | grep -F '(codec' | cut -c 8- | sort
- flv                  FLV / Sorenson Spark / Sorenson H.263 (Flash Video) (codec flv1)
- h263_v4l2m2m         V4L2 mem2mem H.263 encoder wrapper (codec h263)
- h264_omx             OpenMAX IL H.264 video encoder (codec h264)
- h264_v4l2m2m         V4L2 mem2mem H.264 encoder wrapper (codec h264)
- h264_vaapi           H.264/AVC (VAAPI) (codec h264)
- hevc_v4l2m2m         V4L2 mem2mem HEVC encoder wrapper (codec hevc)
- ...
-```
+Most monitors are now 60Hz or more which it probably too much in most cases. The fps filter provides a simple way to get a smaller framerate by dropping some frames.
 
-## List all supported HW accelerators.
+**Example**: Record only 5 frames per second
+```wl-recorder-x -v fps=5``` 
 
-Use `ffmpeg --hwaccels` 
+**Note**: The filter `framerate` can do the same using interpolation (instead of droping or duplicating frames) but it is probably not suitable for a real-time encoder.  
 
-```
-(shell) ffmpeg -hide_banner -hwaccels
-Hardware acceleration methods:
-vdpau
-vaapi
-drm
-```
-  
+**Note**: When reducing the framerate, the `fps` filter should probably be executed first.
 
-## List all supported video filters.  
-  
-Use `ffmpeg --filters`  and keep only the `V->V` entries (i.e. video to video)
-  
-```  
-(shell) ffmpeg -hide_banner -filters  | grep -F 'V->V' 
-Hardware acceleration methods:  
-vdpau  
-vaapi  
-drm  
-```
+**Note**: The `fps` filter is cheap (no physical copies).
 
-## Get details about a specific encoder, filter, or muxer
+## framestep - Select one frame every N frames.
+
+This is a good alternative to `fps` when you do not care about the exact frame rate.
+
+**Example**: Keep only 1/3 of all frames which should give you approximately 20 fps on a typical 60 Hz monitor (59.9???? Hz in practice).
+
+```wl-recorder-x -v framestep=3``` 
+
+## vflip - Perform a vertical flip.
+
+**Note**: This is a cheap vertical flip using pointer arithmetic. No physical copy.  
+
+**Note**: In theory, vflip should never be necessary since the vertical orientation is already handled automatically according to the wayland output description. 
+
+
+## drawtext - Draw some text
+
+**Example**: Draw the current date and time in the top-left corner during the first 2 seconds. 
 
 ```
-(shell) ffmpeg  -hide_banner -h encoder=libx264
-...
-(shell) ffmpeg  -hide_banner -h filter=scale
-...
-(shell) ffmpeg  -hide_banner -h muxer=webm
-...
-```
-## Useful bash aliases 
-
-```
-# Various aliases to get information using ffmpeg and ffprobe.
-# See also man ffmpeg-codecs 
-
-ff-list-encoders() { ffmpeg -hide_banner -encoders "$@" ; }
-ff-list-filters() { ffmpeg -hide_banner -filters "$@" ; }
-ff-list-decoders() { ffmpeg -hide_banner -decoders "$@" ; }
-ff-list-hwaccels() { ffmpeg -hide_banner -hwaccels "$@" ; }
-
-# Warning: most ffmpeg options also accept a few pixel formats
-# aliases that are not listed here. For example, 'rgb32' means
-# either 'argb' or 'bgra' depending of the system endianness.
-ff-list-pixel-formats() { ffmpeg -hide_banner -pix_fmts "$@"; }
-ff-list-pixel-formats-detailed() { ffprobe  -hide_banner -print_format json  -show_pixel_formats "$@" ; }
-
-ff-video-encoders() { ff-list-encoders | grep -E '^ V' | grep -F '(codec' | cut -c 8- | sort ; }
-ff-video-decoders() { ff-list-encoders | grep -E '^ V' | grep -F '(codec' | cut -c 8- | sort ; }
-# Warning: that one does not show sinks and buffers 
-ff-video-filters() { ff-list-filters  | grep --color=never -F 'V->V' | cut -c 5- ; }
-
-ff-video-encoders-short() { ff-video-encoders | cut -c -18 ; }
-ff-video-decoders-short() { ff-video-decoders | cut -c -18 ; }
-
-ff-help-encoder() { ffmpeg -hide_banner -h encoder="$1" ; } 
-ff-help-decoder() { ffmpeg -hide_banner -h decoder="$1" ; } 
-ff-help-filter() { ffmpeg -hide_banner -h filter="$1" ; } 
-
-# Dump the content of a video file
-
-ff-show-format()  { ffprobe -hide_banner -print_format json  -show_format "$@" ; } 
-ff-show-streams() { ffprobe -hide_banner -print_format json  -show_streams "$@" ; } 
-ff-show-packets() { ffprobe -hide_banner -print_format json  -show_packets "$@" ; } 
-ff-show-frames()  { ffprobe -hide_banner -print_format json  -show_frames "$@" ; } 
-
-# Dump only the 1st video stream (so of index 0)
-ff-show-video-streams-1() { ff-show-streams -select_streams v:0 "$@" ; } 
-ff-show-video-packets-1() { ff-show-packets -select_streams v:0 "$@" ; } 
-ff-show-video-frames-1() { ff-show-frames -select_streams v:0 "$@" ; } 
+text=$(date +%c | sed 's/:/\\:/g')
+wf-recorder-x -v "drawtext=enable='between(t,0,2)':text='$text':fontcolor=red:fontsize=20:x=40:y=40-ascent:box=1:boxborderw=4"```
 ```
 
-## The FFMpeg filter syntax for dummies 
+## eq  - Adjust brightness, contrast, gamma, and saturation.
 
-The filters are separated by a comma so `fps=25,format=nv12,hwupload` is actually composed of 3 filters applied in sequence: `fps=25` then `format=nv12` then `hwupload`.
+**Note**: VAAPI users may want to use procamp_vaapi instead.
 
-The `null` video filter does nothing. The input frame is passed to the output unchanged. For example, `fps=12,null,hwupload` is strictly equivalent to `fps=12,hwupload`
+## format - Change the pixel format
 
-A `=`following the filter name indicates a list of arguments separated by colons `:`. Each argument shall be of the form `name=value` but, for some filters, the argument names can be omitted (i.e. positional parameters).  
+## scale: Scale the input video size and/or convert the image format
 
-Here are a few example using the Gaussian Blur filter (see `ffmpeg -hide_banner -h filter=gblur`):
-- `gblur=sigma=0.7` is filter `gblur`with argument `sigma=0.7`
-- `gblur=steps=3,sigma=0.7` is filter `gblur`with arguments `step=3` and `sigma=0.7`
-- `gblur=0.7,3` is filter `gblur`with arguments `sigma=0.7`, `step=3` because sigma and step are the 1st and 2nd positional arguments of `gblur`. 
+**Note**: VAAPI users may want to use scale_vaapi instead.
+
+
 
 # Hardware acceleration
 
@@ -375,5 +321,114 @@ Also, it would be nice if the default filter could be inserted automatically bet
 
 ```wl-recorder-x -v fps=10 -v DEFAULT -v procamp_vaapi=contrast=1.5' -e h264_vaapi```
 
+
+# FFMpeg tips
+
+The ffmpeg and ffprobe commands can provide a lot of information about the FFMpeg capabilities.
+
+## List all supported video encoders
+
+Use `ffmpeg -encoders`. You can filter out the non-video encoders (audio, images, ...) as follow:
+
+```
+(shell) ffmpeg -hide_banner -encoders | grep -E '^ V' | grep -F '(codec' | cut -c 8- | sort
+ flv                  FLV / Sorenson Spark / Sorenson H.263 (Flash Video) (codec flv1)
+ h263_v4l2m2m         V4L2 mem2mem H.263 encoder wrapper (codec h263)
+ h264_omx             OpenMAX IL H.264 video encoder (codec h264)
+ h264_v4l2m2m         V4L2 mem2mem H.264 encoder wrapper (codec h264)
+ h264_vaapi           H.264/AVC (VAAPI) (codec h264)
+ hevc_v4l2m2m         V4L2 mem2mem HEVC encoder wrapper (codec hevc)
+ ...
+```
+
+## List all supported HW accelerators.
+
+Use `ffmpeg --hwaccels` 
+
+```
+(shell) ffmpeg -hide_banner -hwaccels
+Hardware acceleration methods:
+vdpau
+vaapi
+drm
+```
+  
+
+## List all supported video filters.  
+  
+Use `ffmpeg --filters`  and keep only the `V->V` entries (i.e. video to video)
+  
+```  
+(shell) ffmpeg -hide_banner -filters  | grep -F 'V->V' 
+Hardware acceleration methods:  
+vdpau  
+vaapi  
+drm  
+```
+
+## Get details about a specific encoder, filter, or muxer
+
+```
+(shell) ffmpeg  -hide_banner -h encoder=libx264
+...
+(shell) ffmpeg  -hide_banner -h filter=scale
+...
+(shell) ffmpeg  -hide_banner -h muxer=webm
+...
+```
+## Useful bash aliases 
+
+```
+# Various aliases to get information using ffmpeg and ffprobe.
+# See also man ffmpeg-codecs 
+
+ff-list-encoders() { ffmpeg -hide_banner -encoders "$@" ; }
+ff-list-filters() { ffmpeg -hide_banner -filters "$@" ; }
+ff-list-decoders() { ffmpeg -hide_banner -decoders "$@" ; }
+ff-list-hwaccels() { ffmpeg -hide_banner -hwaccels "$@" ; }
+
+# Warning: most ffmpeg options also accept a few pixel formats
+# aliases that are not listed here. For example, 'rgb32' means
+# either 'argb' or 'bgra' depending of the system endianness.
+ff-list-pixel-formats() { ffmpeg -hide_banner -pix_fmts "$@"; }
+ff-list-pixel-formats-detailed() { ffprobe  -hide_banner -print_format json  -show_pixel_formats "$@" ; }
+
+ff-video-encoders() { ff-list-encoders | grep -E '^ V' | grep -F '(codec' | cut -c 8- | sort ; }
+ff-video-decoders() { ff-list-encoders | grep -E '^ V' | grep -F '(codec' | cut -c 8- | sort ; }
+# Warning: that one does not show sinks and buffers 
+ff-video-filters() { ff-list-filters  | grep --color=never -F 'V->V' | cut -c 5- ; }
+
+ff-video-encoders-short() { ff-video-encoders | cut -c -18 ; }
+ff-video-decoders-short() { ff-video-decoders | cut -c -18 ; }
+
+ff-help-encoder() { ffmpeg -hide_banner -h encoder="$1" ; } 
+ff-help-decoder() { ffmpeg -hide_banner -h decoder="$1" ; } 
+ff-help-filter() { ffmpeg -hide_banner -h filter="$1" ; } 
+
+# Dump the content of a video file
+
+ff-show-format()  { ffprobe -hide_banner -print_format json  -show_format "$@" ; } 
+ff-show-streams() { ffprobe -hide_banner -print_format json  -show_streams "$@" ; } 
+ff-show-packets() { ffprobe -hide_banner -print_format json  -show_packets "$@" ; } 
+ff-show-frames()  { ffprobe -hide_banner -print_format json  -show_frames "$@" ; } 
+
+# Dump only the 1st video stream (so of index 0)
+ff-show-video-streams-1() { ff-show-streams -select_streams v:0 "$@" ; } 
+ff-show-video-packets-1() { ff-show-packets -select_streams v:0 "$@" ; } 
+ff-show-video-frames-1() { ff-show-frames -select_streams v:0 "$@" ; } 
+```
+
+## The FFMpeg filter syntax for dummies 
+
+The filters are separated by a comma so `fps=25,format=nv12,hwupload` is actually composed of 3 filters applied in sequence: `fps=25` then `format=nv12` then `hwupload`.
+
+The `null` video filter does nothing. The input frame is passed to the output unchanged. For example, `fps=12,null,hwupload` is strictly equivalent to `fps=12,hwupload`
+
+A `=`following the filter name indicates a list of arguments separated by colons `:`. Each argument shall be of the form `name=value` but, for some filters, the argument names can be omitted (i.e. positional parameters).  
+
+Here are a few example using the Gaussian Blur filter (see `ffmpeg -hide_banner -h filter=gblur`):
+- `gblur=sigma=0.7` is filter `gblur`with argument `sigma=0.7`
+- `gblur=steps=3,sigma=0.7` is filter `gblur`with arguments `step=3` and `sigma=0.7`
+- `gblur=0.7,3` is filter `gblur`with arguments `sigma=0.7`, `step=3` because sigma and step are the 1st and 2nd positional arguments of `gblur`. 
 
 
