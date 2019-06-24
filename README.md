@@ -207,17 +207,35 @@ wf-recorder-x -v "drawtext=enable='between(t,0,2)':text='$text':fontcolor=red:fo
 
 **Note**: The `enable` options is provided by the [Timeline Editing](https://ffmpeg.org/ffmpeg-filters.html#Timeline-editing) functionnality shared my many filters.
 
-## eq  - Adjust brightness, contrast, gamma, and saturation.
+## eq - Adjust brightness, contrast, gamma, and saturation.
 
 **Note**: VAAPI users may want to use procamp_vaapi instead.
 
 ## format - Change the pixel format
 
-## scale: Scale the input video size and/or convert the image format
+## scale - Scale the input video size and/or convert the image format
 
 **Note**: VAAPI users may want to use scale_vaapi instead.
 
 # Hardware acceleration
+
+## movie - Add a movie (or image source)
+
+**Warning**: Non-trivial graph ahead. Please read https://ffmpeg.org/ffmpeg-filters.html#toc-Filtering-Introduction
+
+**Example**:  Insert a logo in the top-left corner of the recording. 
+
+```
+wf-recorder-x -v "movie='logo.png' [logo], [in][logo] overlay=x=10:y=10 "
+```
+
+And the same logo using a vaapi encoder. The trick here is to add the argument `format=rgb` to avoid
+the expensive RGB to YUV conversion on the cpu. 
+
+```
+wf-recorder-x -v "movie='logo.png' [logo], [in][logo] overlay=10:10:format=rgb, hwupload,scale_vaapi=format=nv12" -e h264_vaapi
+```
+
 
 ## General rules
 

@@ -97,7 +97,7 @@ void FrameWriter::load_codec_options(AVDictionary **dict)
 AVPixelFormat FrameWriter::get_input_format()
 {
   return params.format == INPUT_FORMAT_BGR0 ?
-    AV_PIX_FMT_BGR0 : AV_PIX_FMT_RGB0;
+    AV_PIX_FMT_BGRA : AV_PIX_FMT_RGBA;
 }
 
 static void sort_filter_graph(AVFilterGraph *graph)
