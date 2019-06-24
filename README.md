@@ -103,7 +103,9 @@ Remark: In the previous example, the conversion from RGB to YUV444p is done by t
 
 Do not hesitate to fill a bug report if you have questions or additional information about any hw devices.   
 
-# Terminology
+# FFMpeg Terminology
+
+The FFMpeg terminology can be confusing for people that are not familiar with the subject. Here is a short summary of the most important terms.  
 
 - Format (or file format)
 
@@ -125,17 +127,20 @@ Do not hesitate to fill a bug report if you have questions or additional informa
 
 - I, P and B-Frames 
 
-  > This is a complex topic that is well explained [here](https://en.wikipedia.org/wiki/Video_compression_picture_types).
+  > This is a complex topic that is will be better explained [here](https://en.wikipedia.org/wiki/Video_compression_picture_types).
 
 - Codec
 
-  > A codec is a standardized way to compress a video or audio stream.
-  > Common video codecs are `h264`, `h265` (hevc), `vp9`, ...    
+  > A codec is a specification that tells how to compress or uncompress a video or audio stream.
+  > The codec provides the specification, not the implementation.
+  > Common video codecs are `h264`, `h265` (hevc), `vp9`, ... 
 
 - Encoders (and Decoders)
 
-  > Those are codec implementations.
-  > For example,`libx264` and `h264_vaapi` are two encoders for the `h264` codec.
+  > An encoder is basically an implementation that can write video or audio
+  > according to a a codec specification. A decoder does teh reading. 
+  > For example,`libx264` and `h264_vaapi` are two encoders (and decoders)
+  > for the `h264` codec.
 
 - Muxer (or Demuxer)
 
@@ -146,9 +151,15 @@ Do not hesitate to fill a bug report if you have questions or additional informa
  
 - Pixel Format
 
-  > This is the representation of an uncompressed image ; so the individual pixels
-  > also how they are organized to form an image (packed vs planar, argb vs bgra
-  > vs rgba vs ...).
+  > This is the representation of an uncompressed image ; so the individual
+  > pixels also and how they are organized to form a full image (packed vs planar,
+  > argb vs bgra vs rgba vs, ...).
+  > The pixel format defines how the pixels are stored but not what color they represent.
+
+- Color space (and color range)
+
+  > The color space defines how the values stored in a pixel must be interpreted
+  > to produce an actual color. 
 
   
 # Interesting Video Filters (for wl-recorder-x users). 
