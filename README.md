@@ -212,8 +212,6 @@ Here are a few example using the Gaussian Blur filter (see `ffmpeg -hide_banner 
 - `gblur=steps=3,sigma=0.7` is filter `gblur`with arguments `step=3` and `sigma=0.7`
 - `gblur=0.7,3` is filter `gblur`with arguments `sigma=0.7`, `step=3` because sigma and step are the 1st and 2nd positional arguments of `gblur`. 
 
-**TODO**: wl-recorder-x should allow multiple `-v` options and pack them with commas (e.g. `-v fps=10 -v format=nv12 -v hwupload` would be equivalent to `-v fps=10,format=nv12,hwupload`). Would also need a way to keep or to discard the default filters.  
-
 # Hardware acceleration
 
 ## General rules
@@ -244,7 +242,7 @@ So far, the default profile of all VAAPI encoders is using the `nv12` pixel form
 
 Another possibility is to do first the conversion using `format=nv12,hwupload`but this is of course using more CPU (and less GPU).
 
-Filters may be required if the selected profile is using a different pixel format than the default for that encoder. For example, on my system the VAAPI HEVC encoders supports the profile  `main10`  that uses the pixel format `p010` (so 10 bit depth vs 8 bits for `nv12`), it may be required to change the video filters. The default filters are also not used when the `-v` option is used.
+Filters may be required if the selected profile is using a different pixel format than the default for that encoder. For example, on my system the VAAPI HEVC encoders supports the profile  `main10` is using the pixel format `p010` (so 10 bit depth vs 8 bits for `nv12`). The default filters are also not used when the `-v` option is used.
 ```
 # Record at 25 frames per second 
 wf-recorder-x -v "fps=25,hwupload,scale_vaapi=format=nv12" -e h264_vaapi
@@ -278,7 +276,7 @@ scale_vaapi AVOptions:
   format            <string>     ..FV..... Output video format (software format of hardware frames)
 ```
 
-`procamp_vaapi` can be used to adjust brightness, contrast, saturation and hue. 
+`procamp_vaapi` can be used to adjust brightness, contrast, saturation and hue on the GPU. 
 
 ```(shell) ffmpeg -hide_banner -h filter=procamp_vaapi
 Filter procamp_vaapi
@@ -294,6 +292,8 @@ procamp_vaapi AVOptions:
   h                 <float>      ..FV..... Output video hue (from -180 to 180) (default 0)
   hue               <float>      ..FV..... Output video hue (from -180 to 180) (default 0)
 ```
+
+**Remark**: Yes! The name of the argument is `saturatio`. This is likely a mistake that will be fixed in a later version of ffmpeg so better use its short alias `s`. 
 
 For example, it is possible to generate a miniature 64x480 black & white recording at 10 fps as follow:
 ```
@@ -346,4 +346,34 @@ The color space is controlled by setting the encoder option `colorspace` (see ma
 In found that `bt470bg` (PAL/SECAM) and `smpte170m`(NTSC)  are the only two color spaces that give good result. The default value in `wf-recording-x` is `bt470bg`. 
 
 Remark: that has nothing to do with your actual location. 
+
+# TODO list, Future improvements
+
+## Adjust the default filter according to the selected profile. 
+
+For example, `wf-recorder-x -e hevc_vaapi -p profile=main10` should work without having to give a filter.
+
+The profile name could also be given in the `-e` options:
+```wf-recorder-x -e hevc_vaapi:main10````
+
+## Add command line options to stop
+
+after a given time, or limit the size of the output file, ...
+
+## Better shutdown on Ctrl-C
+
+Can occasionally segfault on Ctrl-C and produce a corrupted file which is annoying.
+
+## Allow multiple -v options
+
+So allow
+```wl-recorder-x -v fps=10 -v format=nv12 -v hwupload -e h264_vaapi```
+instead of
+```wl-recorder `-v fps=10,format=nv12,hwupload```
+
+Also, it would be nice if the default filter could be inserted automatically between user-defined filters. Something like may be:
+
+```wl-recorder-x -v fps=10 -v DEFAULT -v procamp_vaapi=contrast=1.5' -e h264_vaapi```
+
+
 

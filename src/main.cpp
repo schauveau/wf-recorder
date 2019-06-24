@@ -37,11 +37,13 @@ std::map<std::string,std::string> auto_hwaccel =
    { "vp9_vaapi",   "vaapi" }
    };
 
-// Default filters for some hwaccel methods
-std::map<std::string,std::string> auto_hw_filter =
+// Default filters for some hwaccel methods.
+std::map<std::string,std::string> auto_filter =
   {
-   //   { "vaapi" , "format=nv12,hwupload" }  
-   { "vaapi" , "hwupload" }  
+   { "h264_vaapi" , "hwupload,scale_vaapi=format=nv12" }  ,
+   { "hevc_vaapi" , "hwupload,scale_vaapi=format=nv12" }  ,
+   { "vp8_vaapi"  , "hwupload,scale_vaapi=format=nv12" }  ,
+   { "vp9_vaapi"  , "hwupload,scale_vaapi=format=nv12" }  ,
   }; 
 
 std::mutex frame_writer_mutex, frame_writer_pending_mutex;
@@ -657,7 +659,7 @@ static void show_usage(std::ostream &out, const char *app)
       break;
     case ARG_ENCODER_PARAM:
       argname = "NAME=VALUE";      
-      text << "Set an encoder codec parameter" << std::endl << indent; 
+      text << "Set a parameter of the encoder." << std::endl << indent; 
       text << "See also: ffmpeg -hide_banner -h encoder=...";
       break;
     case ARG_HIDE_MOUSE:
@@ -757,6 +759,10 @@ int main(int argc, char *argv[])
 
     capture_region selected_region{};
 
+    // Some generic default encoder options
+    params.codec_options["colorspace"]="bt470bg" ; 
+    params.codec_options["color_range"]="jpeg" ;
+    
     int c, i;
     std::string param;
     size_t pos;
@@ -820,11 +826,17 @@ int main(int argc, char *argv[])
             case ARG_ENCODER_PARAM:
                 param = optarg;
                 pos = param.find("=");
-                if (pos != std::string::npos && pos != param.length() - 1)
+                if (pos != std::string::npos )
                 {
                   auto optname = param.substr(0, pos);
-                  auto optvalue = param.substr(pos + 1, param.length() - pos - 1);
+                  auto optvalue = param.substr(pos + 1, param.length() - pos - 1);                  
                   params.codec_options[optname] = optvalue;
+                  // If given 'name=' then clear the option
+                  if ( optvalue.empty() ) {
+                    auto it = params.codec_options.find(optname) ;
+                    if ( it != params.codec_options.end() )
+                        params.codec_options.erase(it) ;
+                  }
                 } else
                 {
                   fprintf(stderr,"Malformed encoder option '%s' (expect 'NAME=VALUE')\n", optarg);
@@ -870,10 +882,10 @@ int main(int argc, char *argv[])
     }   
 
     // Guess a video filter for some hw methods
-    if ( params.video_filter.empty() && !params.hw_method.empty() ) {
+    if ( params.video_filter.empty() && !params.codec.empty() ) {
       std::cerr << "GUESSING filter\n";
-      auto it = auto_hw_filter.find(params.hw_method) ;
-      if ( it != auto_hw_filter.end() ) {
+      auto it = auto_filter.find(params.codec) ;
+      if ( it != auto_filter.end() ) {
         fprintf(stderr, "Using default filter '%s' for hardware %s\n", it->second.c_str(), params.hw_method.c_str());
         params.video_filter = it->second ;
       }
@@ -962,6 +974,7 @@ int main(int argc, char *argv[])
 
     timespec first_frame;
     first_frame.tv_sec = -1;
+    first_frame.tv_nsec = 0;
 
     active_buffer = 0;
     for (auto& buffer : buffers)

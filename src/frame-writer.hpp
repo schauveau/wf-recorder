@@ -86,10 +86,8 @@ class FrameWriter
     AVBufferRef *hw_device_context = NULL;
     AVBufferRef *hw_frame_context = NULL;
 
-    AVPixelFormat choose_sw_format(AVCodec *codec);
     AVPixelFormat get_input_format();
     void init_hw_accel();
-    void init_sws(AVPixelFormat format);
     void init_codecs();
     void init_video_filters(AVCodec *codec);
     void init_video_stream();
