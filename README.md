@@ -2,7 +2,7 @@
 
 This is a modified version of [wf-recorder](https://github.com/ammen99/wf-recorder) that uses FFMpeg filters to simplify the implementation of the video encoder. The intent was not and is still not to create an official fork from wl-recorder. 
 
-Be aware that the command line options of wf-recorder-x are significantly differnent from wf-recorder. Please use the -h or --help option (that is one of the new features) or read carefully the information below before complaining that it does not work exactly as the original.
+Be aware that the command line options of wf-recorder-x are significantly different from wf-recorder. Please use the `-h` or `--help` option (that is one of the new features) or read carefully the information below before complaining that it does not work exactly as the original.
 
 # Installation
 
@@ -56,4 +56,294 @@ Usage: ./build/wf-recorder-x[options] [-f output.mp4]
 
 ```
 
+# New features (not in [wf-recorder](https://github.com/ammen99/wf-recorder) as of June 24th 2019)
+
+## A proper --help or -h option
+
+Obviously!
+
+## Disable the capture of the mouse cursor.
+
+See the `-M` option. 
+
+That feature has nothing to do with the FFMpeg filters and it should be easy to implement in wf-recorder.
+
+## Video filters from the FFMpeg library 'libavfilter'
+
+This is the most important modification but the part that handles the filters in frame-writer.cc is surprisingly small, about 200 lines, but other parts of the code are greatly simplified (no more manual configuration for vaapi, HW frames management, ...). 
+
+FFMpeg filters are documented [here](https://ffmpeg.org/ffmpeg-filters.html), [here](https://www.ffmpeg.org/doxygen/4.1/group__lavfi.html) and [here](https://trac.ffmpeg.org/wiki/FilteringGuide) but we are only interested by the [Video filters](http://ffmpeg.org/ffmpeg-filters.html#Video-Filters).
+
+# Frequently Asked Question
+
+## Did people really asked those question?
+
+No. So far I just made them up. 
+
+## Why the name wl-recorder-x? Does it work with X11? 
+
+Absolutely not. The `x` stands for *eXperimental*. I am just bad at finding new names.
+
+## Can I fill bug report or ask for new features?
+
+Yes but be aware that this is just an experimental project. Support is likely to be very very limited. 
+
+## Does it work with other accelerators than VAAPI?
+
+In theory that should work if ffmpeg can also do it. 
+
+The first step would be to find the proper ffmpeg command (see https://trac.ffmpeg.org/wiki/HWAccelIntro ) and then convert it to wl-encoder-x.
+
+For example, if the following works for you,
+```ffmpeg -i input.mp4 -c:v h264_nvenc -profile high444p -pixel_format yuv444p -preset default output.mp4```  
+then I expect that the following should also work with wl-encoder-x:
+```wl-encoder-x -e h264_nvenc -p profile=high444p -p preset=default -v 'format=yuv444p' ```
+
+Remark: In the previous example, the conversion from RGB to YUV444p is done by the CPU. This is probably quite inefficient so hw-specific filters should probably be used (`hwupload`,`scale_npp`, ...).
+
+Do not hesitate to fill a bug report if you have questions or additional information about any hw devices.   
+
+# FFMpeg tips
+
+The ffmpeg and ffprobe commands can provide a lot of information about the FFMpeg capabilities.
+
+## List all supported video encoders
+
+Use `ffmpeg -encoders`. You can filter out the non-video encoders (audio, images, ...) as follow:
+
+```
+(shell) ffmpeg -hide_banner -encoders | grep -E '^ V' | grep -F '(codec' | cut -c 8- | sort
+ flv                  FLV / Sorenson Spark / Sorenson H.263 (Flash Video) (codec flv1)
+ h263_v4l2m2m         V4L2 mem2mem H.263 encoder wrapper (codec h263)
+ h264_omx             OpenMAX IL H.264 video encoder (codec h264)
+ h264_v4l2m2m         V4L2 mem2mem H.264 encoder wrapper (codec h264)
+ h264_vaapi           H.264/AVC (VAAPI) (codec h264)
+ hevc_v4l2m2m         V4L2 mem2mem HEVC encoder wrapper (codec hevc)
+ ...
+```
+
+## List all supported HW accelerators.
+
+Use `ffmpeg --hwaccels` 
+
+```
+(shell) ffmpeg -hide_banner -hwaccels
+Hardware acceleration methods:
+vdpau
+vaapi
+drm
+```
+  
+
+## List all supported video filters.  
+  
+Use `ffmpeg --filters`  and keep only the `V->V` entries (i.e. video to video)
+  
+```  
+(shell) ffmpeg -hide_banner -filters  | grep -F 'V->V' 
+Hardware acceleration methods:  
+vdpau  
+vaapi  
+drm  
+```
+
+## Get details about a specific encoder, filter, or muxer
+
+```
+(shell) ffmpeg  -hide_banner -h encoder=libx264
+...
+(shell) ffmpeg  -hide_banner -h filter=scale
+...
+(shell) ffmpeg  -hide_banner -h muxer=webm
+...
+```
+## Useful bash aliases 
+
+```
+# Various aliases to get information using ffmpeg and ffprobe.
+# See also man ffmpeg-codecs 
+
+ff-list-encoders() { ffmpeg -hide_banner -encoders "$@" ; }
+ff-list-filters() { ffmpeg -hide_banner -filters "$@" ; }
+ff-list-decoders() { ffmpeg -hide_banner -decoders "$@" ; }
+ff-list-hwaccels() { ffmpeg -hide_banner -hwaccels "$@" ; }
+
+# Warning: most ffmpeg options also accept a few pixel formats
+# aliases that are not listed here. For example, 'rgb32' means
+# either 'argb' or 'bgra' depending of the system endianness.
+ff-list-pixel-formats() { ffmpeg -hide_banner -pix_fmts "$@"; }
+ff-list-pixel-formats-detailed() { ffprobe  -hide_banner -print_format json  -show_pixel_formats "$@" ; }
+
+ff-video-encoders() { ff-list-encoders | grep -E '^ V' | grep -F '(codec' | cut -c 8- | sort ; }
+ff-video-decoders() { ff-list-encoders | grep -E '^ V' | grep -F '(codec' | cut -c 8- | sort ; }
+# Warning: that one does not show sinks and buffers 
+ff-video-filters() { ff-list-filters  | grep --color=never -F 'V->V' | cut -c 5- ; }
+
+ff-video-encoders-short() { ff-video-encoders | cut -c -18 ; }
+ff-video-decoders-short() { ff-video-decoders | cut -c -18 ; }
+
+ff-help-encoder() { ffmpeg -hide_banner -h encoder="$1" ; } 
+ff-help-decoder() { ffmpeg -hide_banner -h decoder="$1" ; } 
+ff-help-filter() { ffmpeg -hide_banner -h filter="$1" ; } 
+
+# Dump the content of a video file
+
+ff-show-format()  { ffprobe -hide_banner -print_format json  -show_format "$@" ; } 
+ff-show-streams() { ffprobe -hide_banner -print_format json  -show_streams "$@" ; } 
+ff-show-packets() { ffprobe -hide_banner -print_format json  -show_packets "$@" ; } 
+ff-show-frames()  { ffprobe -hide_banner -print_format json  -show_frames "$@" ; } 
+
+# Dump only the 1st video stream (so of index 0)
+ff-show-video-streams-1() { ff-show-streams -select_streams v:0 "$@" ; } 
+ff-show-video-packets-1() { ff-show-packets -select_streams v:0 "$@" ; } 
+ff-show-video-frames-1() { ff-show-frames -select_streams v:0 "$@" ; } 
+```
+
+## The FFMpeg filter syntax for dummies 
+
+The filters are separated by a comma so `fps=25,format=nv12,hwupload` is actually composed of 3 filters applied in sequence: `fps=25` then `format=nv12` then `hwupload`.
+
+The `null` video filter does nothing. The input frame is passed to the output unchanged. For example, `fps=12,null,hwupload` is strictly equivalent to `fps=12,hwupload`
+
+A `=`following the filter name indicates a list of arguments separated by colons `:`. Each argument shall be of the form `name=value` but, for some filters, the argument names can be omitted (i.e. positional parameters).  
+
+Here are a few example using the Gaussian Blur filter (see `ffmpeg -hide_banner -h filter=gblur`):
+- `gblur=sigma=0.7` is filter `gblur`with argument `sigma=0.7`
+- `gblur=steps=3,sigma=0.7` is filter `gblur`with arguments `step=3` and `sigma=0.7`
+- `gblur=0.7,3` is filter `gblur`with arguments `sigma=0.7`, `step=3` because sigma and step are the 1st and 2nd positional arguments of `gblur`. 
+
+**TODO**: wl-recorder-x should allow multiple `-v` options and pack them with commas (e.g. `-v fps=10 -v format=nv12 -v hwupload` would be equivalent to `-v fps=10,format=nv12,hwupload`). Would also need a way to keep or to discard the default filters.  
+
+# Hardware acceleration
+
+## General rules
+
+I only have VAAPI but other HW frameworks should work fine (Yeah! Sure ...) assuming that the proper filters and encoder options are specified.  
+
+The current status of Hardware Acceleration in FFMpeg is described [here](https://trac.ffmpeg.org/wiki/HWAccelIntro) 
+
+## VAAPI
+
+A lot of good tips are given [here](https://trac.ffmpeg.org/wiki/Hardware/VAAPI).
+
+I am trying to configure wf-recorder-x  so that it works out of the box when a vaapi encoder is specified.  
+```
+wf-recorder-x -e h264_vaapi
+wf-recorder-x -e hevc_vaapi
+wf-recorder-x -e vp8_vaapi
+wf-recorder-x -e vp9_vaapi
+```
+When a known vaapi encoder is used, the default behavior is to use the device `/dev/dri/renderD128`. That can be changed with the `-d` option:
+```
+wf-recorder-x -e h264_vaapi -d /dev/dri/renderD129
+```
+So far, the default profile of all VAAPI encoders is using the `nv12` pixel format and their default filter is defined as `hwupload,scale_vaapi=format=nv12`
+  
+- `hwupload` takes care of uploading the image to the device (in RGB format).
+- `scale_vaapi=format=nv12`performs the conversion RGB -> NV12
+
+Another possibility is to do first the conversion using `format=nv12,hwupload`but this is of course using more CPU (and less GPU).
+
+Filters may be required if the selected profile is using a different pixel format than the default for that encoder. For example, on my system the VAAPI HEVC encoders supports the profile  `main10`  that uses the pixel format `p010` (so 10 bit depth vs 8 bits for `nv12`), it may be required to change the video filters. The default filters are also not used when the `-v` option is used.
+```
+# Record at 25 frames per second 
+wf-recorder-x -v "fps=25,hwupload,scale_vaapi=format=nv12" -e h264_vaapi
+# Record using the HEVC main10 profile.
+wf-recorder-x -v "hwupload,scale_vaapi=format=p010" -e hevc_vaapi -p profile=main10
+```
+A few filters can be used after hwupload, so on the GPU:
+```
+(shell) ffmpeg -hide_banner -filters | grep vaapi 
+ ... deinterlace_vaapi V->V       Deinterlacing of VAAPI surfaces
+ ... denoise_vaapi     V->V       VAAPI VPP for de-noise
+ ... procamp_vaapi     V->V       ProcAmp (color balance) adjustments for hue, saturation, brightness, contrast
+ ... scale_vaapi       V->V       Scale to/from VAAPI surfaces.
+ ... sharpness_vaapi   V->V       VAAPI VPP for sharpness
+```
+`deinterlace_vaapi`, `denoise_vaapi`, and `sharpness_vaapi` are probably not relevant here.
+
+`scale_vaapi` can scale the image and/or change the pixel format.
+
+```
+(shell) ffmpeg -hide_banner -h filter=scale_vaapi
+Filter scale_vaapi
+  Scale to/from VAAPI surfaces.
+    Inputs:
+       #0: default (video)
+    Outputs:
+       #0: default (video)
+scale_vaapi AVOptions:
+  w                 <string>     ..FV..... Output video width (default "iw")
+  h                 <string>     ..FV..... Output video height (default "ih")
+  format            <string>     ..FV..... Output video format (software format of hardware frames)
+```
+
+`procamp_vaapi` can be used to adjust brightness, contrast, saturation and hue. 
+
+```(shell) ffmpeg -hide_banner -h filter=procamp_vaapi
+Filter procamp_vaapi
+  ProcAmp (color balance) adjustments for hue, saturation, brightness, contrast
+...
+procamp_vaapi AVOptions:
+  b                 <float>      ..FV..... Output video brightness (from -100 to 100) (default 0)
+  brightness        <float>      ..FV..... Output video brightness (from -100 to 100) (default 0)
+  s                 <float>      ..FV..... Output video saturation (from 0 to 10) (default 1)
+  saturatio         <float>      ..FV..... Output video saturation (from 0 to 10) (default 1)
+  c                 <float>      ..FV..... Output video contrast (from 0 to 10) (default 1)
+  contrast          <float>      ..FV..... Output video contrast (from 0 to 10) (default 1)
+  h                 <float>      ..FV..... Output video hue (from -180 to 180) (default 0)
+  hue               <float>      ..FV..... Output video hue (from -180 to 180) (default 0)
+```
+
+For example, it is possible to generate a miniature 64x480 black & white recording at 10 fps as follow:
+```
+wf-recorder-x -v "fps=25,hwupload,scale_vaapi=format=nv12:w=640:h=480,procamp_vaapi=s=0'" -e h264_vaapi
+```
+# Color accuracy
+
+Color accuracy is a very difficult topic, especially when converting images between different RGB and YUV formats. 
+
+As of today, [wf-recorder](https://github.com/ammen99/wf-recorder) does not even attempt to handle the color space and the color range which can cause some significant differences in the appearance of the recording.
+
+A simple procedure to check the accuracy of a screencast is
+- Load a color chart such a as [this one](http://www.galerie-photo.com/images/mire-16cm-RVB.jpg) in your favorite image viewer.
+- Do a short recording of the whole screen.
+- Switch to the next or previous workspace.
+- Play the video fullscreen indefinitely (e.g. `mpv --loop --fullscreen recording.mp4`)
+- Use keyboard shortcuts to quickly swap between the two workspaces. 
+
+The colors will never be perfectly accurate (especially on small text beccause of YUV compression) but two major issues can be noted on the color chart:
+- A significant difference in the brightness indicates that the color range is incorrect. This is usually very noticeable at the two extremes of the gray scales.  
+- A significant difference in the color saturation indicates that the color space is incorrect. 
+
+## Color Range
+
+There are 2 possible color ranges:
+- The limited range ('mpeg', 'tv' or value 1) is only using values 16-235.
+- The full range ('jpeg', 'pc', or value 2) is using all values 0-256.
+
+For example an incorrect color range conversion can cause a drak gray (e.g. brightness < 20) to become totally black. The color range can normally be changed by passing a `color_range` option to the encoder (see man ffmpeg-codecs):
+```
+# Use the limited/MPEG/TV range
+wf-recorder-x -e libx264 -p color_range=tv -f recording-full.mkv
+# Use the full/JPEG/PC range
+wf-recorder-x -e libx264 -p color_range=pc -f recording-limited.mkv
+```
+
+The default in wf-recording-x is to currently to use color_range=pc by default but, unfortunately, some encoders are ignoring that option. Here is the current state of the color range support on my system (Debian, VAAPI via i965_drv) using a mkv file format. 
+
+- `h264_vaapi*, *hevc_vaapi`, `libx264`, `libx265`, `libxvid`
+
+   > have correct with color_range=pc (the default)
+
+- `vp8_vaapi`, `vp9_vaapi`, `libvpx`, and `libvpx-vp9`  
+   > have incorrect color range. There is probably something specific that need to be doce for those VP format.
+
+## Color space
+
+The color space is controlled by setting the encoder option `colorspace` (see man ffmpeg-codecs). 
+
+In found that `bt470bg` (PAL/SECAM) and `smpte170m`(NTSC)  are the only two color spaces that give good result. The default value in `wf-recording-x` is `bt470bg`. 
+
+Remark: that has nothing to do with your actual location. 
 
