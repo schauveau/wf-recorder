@@ -139,13 +139,18 @@ Do not hesitate to fill a bug report if you have questions or additional informa
 
 - Muxer (or Demuxer)
 
- > A muxer (or multiplexer) is the piece of code that is responsible from
- > writing multiple streams into a single file format (and the demuxer does
- > the opposite).
- > In FFMpeg, the terms **muxers** and **demuxers** are basically interchangable
- > with **format**.
+  > A muxer (or multiplexer) is the piece of code that is responsible from
+  > writing multiple streams into a single file format (and the demuxer does
+  > the opposite).
+  > In FFMpeg, the terms **muxers**  basically means **format during decoding**.
  
+- Pixel Format
 
+  > This is the representation of an uncompressed image ; so the individual pixels
+  > also how they are organized to form an image (packed vs planar, argb vs bgra
+  > vs rgba vs ...).
+
+  
 # Interesting Video Filters (for wl-recorder-x users). 
 
 Here is a non-exaustive list of video filters that could be useful. 
