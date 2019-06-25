@@ -60,59 +60,59 @@ struct FrameWriterParams
 
 class FrameWriter
 {
-    FrameWriterParams params;
-    void load_codec_options(AVDictionary **dict);
+  FrameWriterParams params;
+  void load_codec_options(AVDictionary **dict);
 
-    SwsContext* swsCtx;
-    AVOutputFormat* outputFmt;
-    AVStream* videoStream;
-    AVCodecContext* videoCodecCtx;
-    AVFormatContext* fmtCtx;
+  //    SwsContext* swsCtx;
+  AVOutputFormat* outputFmt=NULL;
+  AVStream* videoStream=NULL;
+  AVCodecContext* videoCodecCtx=NULL;
+  AVFormatContext* fmtCtx=NULL;
 
-    AVFilterContext * videoFilterSourceCtx = NULL;
-    AVFilterContext * videoFilterSinkCtx = NULL;
-    AVFilterGraph   * videoFilterGraph = NULL;
+  AVFilterContext * videoFilterSourceCtx = NULL;
+  AVFilterContext * videoFilterSinkCtx = NULL;
+  AVFilterGraph   * videoFilterGraph = NULL;
 
-    // Properties of the video filter output.
-    struct {
-      int width;
-      int height;
-      AVRational sar;  // sample aspect ratio
-      AVPixelFormat pix_fmt; 
-      AVRational time_base;
-      AVRational frame_rate; // can be 1/0 if unknown
-    } vfilter ;
+  // Properties of the video filter output.
+  struct {
+    int width;
+    int height;
+    AVRational sar;  // sample aspect ratio
+    AVPixelFormat pix_fmt; 
+    AVRational time_base;
+    AVRational frame_rate; // can be 1/0 if unknown
+  } vfilter ;
   
-    AVBufferRef *hw_device_context = NULL;
-    AVBufferRef *hw_frame_context = NULL;
-
-    AVPixelFormat get_input_format();
-    void init_hw_accel();
-    void init_codecs();
-    void init_video_filters(AVCodec *codec);
-    void init_video_stream();
-
-    AVFrame *encoder_frame = NULL;
-    AVFrame *hw_frame = NULL;
-
-    SwrContext *swrCtx;
-    AVStream *audioStream;
-    AVCodecContext *audioCodecCtx;
-    void init_swr();
-    void init_audio_stream();
-    void send_audio_pkt(AVFrame *frame);
-
-    void finish_frame(AVPacket& pkt, bool isVideo);
-
+  AVBufferRef *hw_device_context = NULL;
+  AVBufferRef *hw_frame_context = NULL;
+  
+  AVPixelFormat get_input_format();
+  void init_hw_accel();
+  void init_codecs();
+  void init_video_filters(AVCodec *codec);
+  void init_video_stream();
+  
+  AVFrame *encoder_frame = NULL;
+  AVFrame *hw_frame = NULL;
+  
+  SwrContext *swrCtx=NULL;
+  AVStream *audioStream=NULL;
+  AVCodecContext *audioCodecCtx=NULL;
+  void init_swr();
+  void init_audio_stream();
+  void send_audio_pkt(AVFrame *frame);
+  
+  void finish_frame(AVPacket& pkt, bool isVideo);
+  
 public :
-    FrameWriter(const FrameWriterParams& params);
-    void add_frame(const uint8_t* pixels, int64_t usec, bool y_invert);
-
-    /* Buffer must have size get_audio_buffer_size() */
-    void add_audio(const void* buffer);
-    size_t get_audio_buffer_size();
-
-    ~FrameWriter();
+  FrameWriter(const FrameWriterParams& params);
+  void add_frame(const uint8_t* pixels, int64_t usec, bool y_invert);
+  
+  /* Buffer must have size get_audio_buffer_size() */
+  void add_audio(const void* buffer);
+  size_t get_audio_buffer_size();
+  
+  ~FrameWriter();
 };
 
 #include <memory>

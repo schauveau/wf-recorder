@@ -236,7 +236,6 @@ the expensive RGB to YUV conversion on the cpu.
 wf-recorder-x -v "movie='logo.png' [logo], [in][logo] overlay=10:10:format=rgb, hwupload,scale_vaapi=format=nv12" -e h264_vaapi
 ```
 
-
 ## General rules
 
 I only have VAAPI but other HW frameworks should work fine (Yeah! Sure ...) assuming that the proper filters and encoder options are specified.  
@@ -459,21 +458,25 @@ drm
 # Various aliases to get information using ffmpeg and ffprobe.
 # See also man ffmpeg-codecs 
 
+# Various aliases to get information using ffmpeg and ffprobe.
+# See also man ffmpeg-codecs 
+
 ff-list-encoders() { ffmpeg -hide_banner -encoders "$@" ; }
 ff-list-filters() { ffmpeg -hide_banner -filters "$@" ; }
 ff-list-decoders() { ffmpeg -hide_banner -decoders "$@" ; }
 ff-list-hwaccels() { ffmpeg -hide_banner -hwaccels "$@" ; }
 
+
 # Warning: most ffmpeg options also accept a few pixel formats
 # aliases that are not listed here. For example, 'rgb32' means
-# either 'argb' or 'bgra' depending of the system endianness.
+# either 'argb' or 'bgra' depending of the system endianness. 
 ff-list-pixel-formats() { ffmpeg -hide_banner -pix_fmts "$@"; }
 ff-list-pixel-formats-detailed() { ffprobe  -hide_banner -print_format json  -show_pixel_formats "$@" ; }
 
 ff-video-encoders() { ff-list-encoders | grep -E '^ V' | grep -F '(codec' | cut -c 8- | sort ; }
 ff-video-decoders() { ff-list-encoders | grep -E '^ V' | grep -F '(codec' | cut -c 8- | sort ; }
-# Warning: that one does not show sinks and buffers 
-ff-video-filters() { ff-list-filters  | grep --color=never -F 'V->V' ; }
+# Similar to ff-list-filters but without the audio filters 
+ff-video-filters()  { ff-list-filters  | grep --color=never -E -v -e 'A->' -e '->A' -e 'A ='; }
 
 ff-video-encoders-short() { ff-video-encoders | cut -c -18 ; }
 ff-video-decoders-short() { ff-video-decoders | cut -c -18 ; }
@@ -482,17 +485,37 @@ ff-help-encoder() { ffmpeg -hide_banner -h encoder="$1" ; }
 ff-help-decoder() { ffmpeg -hide_banner -h decoder="$1" ; } 
 ff-help-filter() { ffmpeg -hide_banner -h filter="$1" ; } 
 
+ff-help () {
+    local pipe=cat   
+    [ -t 1 ] && pipe="less -S"    
+    (
+        if [ -z "$1" ] ; then
+            echo "####### ff-video-encoders" 
+            ff-video-encoders
+            echo "####### ff-video-filters"
+            ff-video-filters
+        else            
+            echo "####### ff-help-encoder $1"
+            ff-help-encoder "$1"
+            echo "####### ff-help-filter $1"
+            ff-help-filter "$1"
+        fi
+    ) | $pipe
+}
+
 # Dump the content of a video file
 
 ff-show-format()  { ffprobe -hide_banner -print_format json  -show_format "$@" ; } 
+
 ff-show-streams() { ffprobe -hide_banner -print_format json  -show_streams "$@" ; } 
 ff-show-packets() { ffprobe -hide_banner -print_format json  -show_packets "$@" ; } 
 ff-show-frames()  { ffprobe -hide_banner -print_format json  -show_frames "$@" ; } 
 
-# Dump only the 1st video stream (so of index 0)
+# show only for the 1st video stream (so of index 0)
 ff-show-video-streams-1() { ff-show-streams -select_streams v:0 "$@" ; } 
 ff-show-video-packets-1() { ff-show-packets -select_streams v:0 "$@" ; } 
 ff-show-video-frames-1() { ff-show-frames -select_streams v:0 "$@" ; } 
+
 ```
 
 ## The FFMpeg filter syntax for dummies 

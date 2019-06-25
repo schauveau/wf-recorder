@@ -128,6 +128,7 @@ struct wf_buffer
     int width, height, stride;
     bool y_invert;
 
+  
     timespec presented;
     uint32_t base_usec;
 
@@ -285,8 +286,46 @@ static int next_frame(int frame)
     return (frame + 1) % MAX_BUFFERS;
 }
 
-static InputFormat get_input_format(wf_buffer& buffer)
+struct PixelFormatInfo {
+  wl_shm_format wl_fmt ;
+  InputFormat   fmt ;
+  bool          alpha_is_zero ; 
+  const char *  name ;
+} ;
+
+PixelFormatInfo supported_pixel_formats [] =
+  {
+   { WL_SHM_FORMAT_ARGB8888, INPUT_FORMAT_BGR0, true,  "argb8888" },
+   { WL_SHM_FORMAT_XRGB8888, INPUT_FORMAT_BGR0, false, "xrgb8888" },
+   { WL_SHM_FORMAT_ABGR8888, INPUT_FORMAT_RGB0, true,  "abgr8888" },
+   { WL_SHM_FORMAT_XBGR8888, INPUT_FORMAT_RGB0, false, "xbgr8888" },
+  };
+
+#if 0
+static const char *
+get_wl_shf_format_name(wl_shm_format format)
 {
+  for ( auto & info : supported_pixel_formats ) { 
+    if ( info.wl_fmt == format) {
+      return info.name;
+    }
+  }
+  return "?"; 
+}
+#endif
+
+static InputFormat get_input_format(wl_shm_format wl_fmt) 
+{
+  for ( auto & info : supported_pixel_formats ) { 
+    if ( info.wl_fmt == wl_fmt) {
+      return info.fmt;
+    }
+  }
+
+  fprintf(stderr, "Unsupported buffer format %d, exiting.", wl_fmt);
+  std::exit(0);
+
+#if 0
     if (buffer.format == WL_SHM_FORMAT_ARGB8888)
         return INPUT_FORMAT_BGR0;
     if (buffer.format == WL_SHM_FORMAT_XRGB8888)
@@ -299,6 +338,7 @@ static InputFormat get_input_format(wf_buffer& buffer)
 
     fprintf(stderr, "Unsupported buffer format %d, exiting.", buffer.format);
     std::exit(0);
+#endif
 }
 
 static void write_loop(FrameWriterParams params, PulseReaderParams pulseParams)
@@ -327,7 +367,7 @@ static void write_loop(FrameWriterParams params, PulseReaderParams pulseParams)
         if (!frame_writer)
         {
             /* This is the first time buffer attributes are available */
-            params.format = get_input_format(buffer);
+            params.format = get_input_format(buffer.format);
             params.width = buffer.width;
             params.height = buffer.height;
             frame_writer = std::unique_ptr<FrameWriter> (new FrameWriter(params));
@@ -388,6 +428,7 @@ static void check_has_protos()
 }
 
 wl_display *display = NULL;
+
 static void sync_wayland()
 {
     wl_display_dispatch(display);
@@ -525,6 +566,8 @@ static const int ARG_SHOW_MOUSE     = 'm';
 static const int ARG_YUV420P        = 'y';
 static const int ARG_VIDEO_FILTER   = 'v'; 
 static const int ARG_VIDEO_TRACE    = 'T'; 
+static const int ARG_SET_TEST_FORMAT = LONGARG; 
+static const int ARG_TEST_COLORS    = LONGARG; 
 static const int ARG_FFMPEG_DEBUG   = LONGARG ;
 static const int ARG_VAAPI          = LONGARG ;
       
@@ -548,6 +591,8 @@ static struct option options[] =
    { "video-filter",    required_argument, NULL, ARG_VIDEO_FILTER},
    { "video-trace",     no_argument,       NULL, ARG_VIDEO_TRACE },   
    { "vaapi",           no_argument,       NULL, ARG_VAAPI },   
+   { "set-test-format", required_argument, NULL, ARG_SET_TEST_FORMAT },   
+   { "test-colors",     no_argument,       NULL, ARG_TEST_COLORS },   
    { 0,                 0,                 NULL,  0  }
   };
 
@@ -690,6 +735,13 @@ static void show_usage(std::ostream &out, const char *app)
     case ARG_VAAPI:
       text << "Alias for --" << long_name(ARG_HW_ACCEL) << "=vaapi" ;
       break;
+    case ARG_SET_TEST_FORMAT:
+      argname = "FORMAT";
+      text << "Set the input pixel format for the builtin tests.";
+      break;
+    case ARG_TEST_COLORS:
+      text << "Generate a color test pattern.";
+      break;
     default:
       text << "TO BE DOCUMENTED" ;
       break;
@@ -741,165 +793,288 @@ std::string time_format(const char *fmt)
   return buffer;
 }
 
-int main(int argc, char *argv[])
+constexpr const char* default_cmdline_output = "interactive";
+
+//
+// A few variables controled by command line options
+// and used in do_wayland_capture(). 
+// FIXME: Should not be global
+//
+std::string cmdline_output = default_cmdline_output;
+capture_region selected_region{};
+bool show_cursor = true ;
+PulseReaderParams pulseParams;
+
+class Image {
+public:
+  typedef uint32_t color_t ;
+  
+  int width ;
+  int height ;
+  int linesize ;
+  wl_shm_format fmt ;
+
+  color_t * data=0 ;
+
+  color_t outside_color = 0 ;
+
+  uint32_t default_alpha = 0xff ;
+  
+  Image(int w,int h,wl_shm_format fmt) : width(w), height(h), linesize(w), fmt(fmt)
+  {
+    data = new color_t[linesize*height] ;    
+  }
+
+  // pack(0x11,0x22,0x33,044) is 0x11223344 
+  static color_t pack(uint8_t a, uint8_t b, uint8_t c, uint8_t d) {
+    return  (a<<24) | (b<<16) | (c<<8) | (d<<0) ;
+  }
+
+  // unpack(0x11223344,a,b,c,d) gives a=0x11, b=0x22, c=0x33, d=0x44 
+  static void unpack(color_t col, uint8_t &a, uint8_t &b, uint8_t &c, uint8_t &d) {
+    a = (col>>24) ;
+    b = (col>>16) ;
+    c = (col>>8) ;
+    d = (col>>0) ;
+  }
+  
+  color_t gray(uint8_t v) {
+    return rgb(v,v,v,default_alpha) ;
+  }
+    
+  color_t gray(uint8_t v, uint8_t alpha) {
+    return rgb(v,v,v,alpha) ;
+  }
+    
+  color_t rgb(uint8_t r, uint8_t g, uint8_t b) {
+    return rgb(r,g,b,default_alpha) ;
+  }
+    
+  color_t rgb(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+    switch(fmt) {
+    case WL_SHM_FORMAT_ARGB8888: return pack(a,r,g,b) ; 
+    case WL_SHM_FORMAT_XRGB8888: return pack(a,r,g,b) ; 
+    case WL_SHM_FORMAT_ABGR8888: return pack(a,b,g,r) ; 
+    case WL_SHM_FORMAT_XBGR8888: return pack(a,b,g,r) ; 
+    default:
+        return 0x66666666u ; // Hoops  
+    }
+  }
+
+  void color2rgba( color_t col, uint8_t &r, uint8_t &g, uint8_t &b, uint8_t &a)
+  {
+    switch(fmt) {
+    case WL_SHM_FORMAT_ARGB8888: unpack(col, a,r,g,b) ; break;
+    case WL_SHM_FORMAT_XRGB8888: unpack(col, a,r,g,b) ; break;
+    case WL_SHM_FORMAT_ABGR8888: unpack(col, a,b,g,r) ; break;
+    case WL_SHM_FORMAT_XBGR8888: unpack(col, a,b,g,r) ; break; 
+    default:
+      r = g = b = a = 0x66 ;
+    }
+  }
+  
+  inline color_t & at(int x, int y) { return data[x+y*linesize] ; }
+
+  
+  inline bool valid(int x, int y) {
+    return x>=0 && x<width && y>0 && y < height ;
+  }
+  
+  void set(int x,int y, color_t color) {
+    if (valid(x,y))
+      at(x,y) = color ; 
+  }
+
+  color_t get(int x,int y) {
+    if (valid(x,y))
+      return at(x,y) ;
+    else
+      return outside_color ; 
+  }
+  
+  inline void fill(color_t color)
+  {
+    fillbox(0,0,width,height,color);
+  }
+  
+  inline void fillbox(int x, int y, int w, int h, color_t color)
+  {
+    if (x<0) { x=0; w+=x; } 
+    if (y<0) { y=0; h+=y; }
+    w = std::min(w,width-x) ;
+    h = std::min(h,height-y) ;
+    for (int j=0; j<h; j++) {   
+      for (int i=0; i<w; i++) {
+        at(x+i,y+j) = color ;
+      }
+    }
+  }
+
+  inline void write_ppm(std::string filename) {
+
+    FILE * f = fopen(filename.c_str(),"wb") ; 
+    if (!f) {
+      fprintf(stderr,"Failed to open ppm file '%s' for writing\n",filename.c_str());
+      exit(1);
+    }
+    fprintf(f,"P6\n# Generated by wl-recorder-x\n%d %d\n%d\n", width, height, 255);
+    for (int y=0; y<height ; y++) {
+      for (int x=0; x<width ; x++) {
+        uint8_t data[4] ;
+        this->color2rgba( at(x,y), data[0],data[1],data[2],data[3]) ;
+        fwrite(data,3,1,f);
+      }
+    }
+    fclose(f);
+  }
+  
+} ;
+
+
+uint32_t color(uint8_t r, uint8_t g, uint8_t b, uint8_t a)
 {
-    bool show_cursor = true ;
-    FrameWriterParams params;
-    params.file = default_filename;
-    params.codec = DEFAULT_CODEC;
-    params.enable_ffmpeg_debug_output = false;
-    params.enable_audio = false;
-    params.to_yuv = false;
-    params.trace_video_progress=false;
+  return (r<<0) | (g<<8) | (b<<16) | (a<<24) ;
+}
+
+struct rgb {
+  int r,g,b ;
+} ;
+
+void
+draw_color_scale(std::string name,
+                 FILE *out,
+                 Image &img, int x0, int y0, int w, int h,
+                 int step,
+                 rgb c0,
+                 rgb c1)
+
+{
+  // Boxes width and height
+  int bw = w/step ;
+  int bh = h;
+  
+  // 8bit to 16bit colors to avoid rounding errors
+  int R0 = (c0.r << 8) | c0.r ;
+  int G0 = (c0.g << 8) | c0.g ;
+  int B0 = (c0.b << 8) | c0.b ;
+  int R1 = (c1.r << 8) | c1.r ;
+  int G1 = (c1.g << 8) | c1.g ;
+  int B1 = (c1.b << 8) | c1.b ;
+
+  if (out) fprintf(out,"#%s\n" , name.c_str() ) ;
+  if (out) fprintf(out,"%d\n" , step);
+  for (int i=0;i<step;i++) {
+    int x = x0+i*bw ;
+    int y = y0 ;
+    int r = ( ( (step-1-i)*R0 + i*R1 ) / (step-1) ) >> 8 ;
+    int g = ( ( (step-1-i)*G0 + i*G1 ) / (step-1) ) >> 8 ;
+    int b = ( ( (step-1-i)*B0 + i*B1 ) / (step-1) ) >> 8 ;
+    if (out) fprintf(out,"%d %d = %d %d %d\n",x+bw/2,y+bh/2,r,g,b) ;
+    img.fillbox(x,y, bw, bh, img.rgb(r,g,b) ) ;
+  }
+}
+
+//
+// Fake input: generate a color test pattern
+//
+int do_test_colors(FrameWriterParams params, wl_shm_format wl_fmt)
+{
+  int length = 100 ; // number of frames to generate
+
+  int w = 512;
+  int h = 512;    
+  params.format = get_input_format(wl_fmt);
+  params.width  = w;
+  params.height = h;
+  params.enable_audio = false ;
+
+  {
+    FrameWriter frame_writer(params);
+
+    Image img( w, h, wl_fmt) ;
+    int64_t usec = 0 ;
     
-    PulseReaderParams pulseParams;
+    img.fill( img.gray(128) ) ;
 
-    constexpr const char* default_cmdline_output = "interactive";
-    std::string cmdline_output = default_cmdline_output;
+    int dy = h/32 ;
+    int y  = dy*3 ;
 
-    capture_region selected_region{};
+    int step = 32;
 
-    // Some generic default encoder options
-    params.codec_options["colorspace"]="bt470bg" ; 
-    params.codec_options["color_range"]="jpeg" ;
-    
-    int c, i;
-    std::string param;
-    size_t pos;
-    const char *optstring = gen_optstring();
-    //  std::cerr << "optstring = " << optstring << "\n";    
-    while((c = getopt_long(argc, argv, optstring, options, &i)) != -1)
-    {
-        switch(c)
-        {
-            case ARG_HELP:
-              show_usage(std::cerr, argv[0]);
-                return EXIT_FAILURE;
-                
-            case ARG_OUTPUT:
-              {
-                params.file = time_format(optarg);
-              }
-              break ;
-              
-            case ARG_FILE:
-                params.file = optarg;
-                break;
+    int v0,v1 ;
 
-            case ARG_SCREEN:
-                cmdline_output = optarg;
-                break;
+    const char *info = getenv("COLOR_TEST_INFO");
+    const char *ref = getenv("COLOR_TEST_PPM");
 
-            case ARG_GEOMETRY:
-                selected_region.set_from_string(optarg);
-                break;
+    FILE *f = 0 ;
 
-            case ARG_ENCODER:
-                params.codec = optarg;
-                break;
-
-            case ARG_HW_ACCEL:
-                params.hw_method = optarg;
-                break;
-
-            case ARG_HW_DEVICE:
-                params.hw_device = optarg;
-                break;
-
-            case ARG_FFMPEG_DEBUG:
-                params.enable_ffmpeg_debug_output = true;
-                break;
-
-            case ARG_AUDIO:
-                params.enable_audio = true;
-                pulseParams.audio_source = optarg ? strdup(optarg) : NULL;
-                break;
-
-            case ARG_YUV420P:
-                params.to_yuv = true;
-                break;
-
-            case ARG_VIDEO_FILTER:
-                params.video_filter = optarg;
-                break;
-                
-            case ARG_ENCODER_PARAM:
-                param = optarg;
-                pos = param.find("=");
-                if (pos != std::string::npos )
-                {
-                  auto optname = param.substr(0, pos);
-                  auto optvalue = param.substr(pos + 1, param.length() - pos - 1);                  
-                  params.codec_options[optname] = optvalue;
-                  // If given 'name=' then clear the option
-                  if ( optvalue.empty() ) {
-                    auto it = params.codec_options.find(optname) ;
-                    if ( it != params.codec_options.end() )
-                        params.codec_options.erase(it) ;
-                  }
-                } else
-                {
-                  fprintf(stderr,"Malformed encoder option '%s' (expect 'NAME=VALUE')\n", optarg);
-                  exit(1);
-                }
-                break;
-
-           case ARG_VIDEO_TRACE:
-                params.trace_video_progress=true;
-                break; 
-
-           case ARG_VAAPI:
-                params.hw_method = "vaapi";
-                break;
-
-           case ARG_SHOW_MOUSE:
-                show_cursor = true;
-                break;
-
-           case ARG_HIDE_MOUSE:
-                show_cursor = false;
-                break;
-                
-            default:
-                printf("Non implemented command line option (%s)\n", optarg);
-               return EXIT_FAILURE ;
-        }
-    }
-
-    // No unprocessed arguments
-    if (optind != argc) {
-      fprintf(stderr,"Unexpected argument '%s'\n",argv[optind]);
-      return EXIT_FAILURE;
-    }
-
-    // Guess the hw_method for some known codecs.
-    if ( params.hw_method.empty() && !params.codec.empty() ) {
-      auto it = auto_hwaccel.find(params.codec) ;
-      if ( it != auto_hwaccel.end() ) {
-        fprintf(stderr, "Using %s for encoder %s\n", it->second.c_str(), params.codec.c_str());
-        params.hw_method = it->second ;
-      }
-    }   
-
-    // Guess a video filter for some hw methods
-    if ( params.video_filter.empty() && !params.codec.empty() ) {
-      std::cerr << "GUESSING filter\n";
-      auto it = auto_filter.find(params.codec) ;
-      if ( it != auto_filter.end() ) {
-        fprintf(stderr, "Using default filter '%s' for hardware %s\n", it->second.c_str(), params.hw_method.c_str());
-        params.video_filter = it->second ;
+    if (info) {
+      f = fopen(info,"w");
+      if (f) {
+        fprintf(stderr, "generating %s\n", info) ;
+      } else {
+        fprintf(stderr, "failed to open '%s' for writing\n", info) ;
       }
     }
-    
-    // Sensible default when using vaapi. 
-    if ( params.hw_method == "vaapi" ) {
-      // TODO: find the first render device.
-      if ( params.hw_device.empty() || params.hw_device=="auto" ) {
-        params.hw_device = "/dev/dri/renderD128" ;
-      }
-    }
+      
+    if (f) fprintf(f,"%s\n",params.file.c_str());
+    if (f) fprintf(f,"%d %d\n",w,h);
+          
+    v0=0 ; v1=255; 
+    draw_color_scale("full-g" ,f, img, 0, y, w, dy, step, rgb{v0,v0,v0} , rgb{v1,v1,v1} ); y += dy;
+    draw_color_scale("full-r" ,f, img, 0, y, w, dy, step, rgb{v0,v0,v0} , rgb{v1,v0,v0} ); y += dy; 
+    draw_color_scale("full-g" ,f, img, 0, y, w, dy, step, rgb{v0,v0,v0} , rgb{v0,v1,v0} ); y += dy;
+    draw_color_scale("full-b" ,f, img, 0, y, w, dy, step, rgb{v0,v0,v0} , rgb{v0,v0,v1} ); y += dy;
+    draw_color_scale("full-y" ,f, img, 0, y, w, dy, step, rgb{v0,v0,v0} , rgb{v1,v1,v0} ); y += dy;
+    draw_color_scale("full-m" ,f, img, 0, y, w, dy, step, rgb{v0,v0,v0} , rgb{v1,v0,v1} ); y += dy;
+    draw_color_scale("full-c" ,f, img, 0, y, w, dy, step, rgb{v0,v0,v0} , rgb{v0,v1,v1} ); y += dy;
+    y += 2*dy ;    
 
+    v0 = 0 ; v1 = 31 ; 
+    draw_color_scale("low-g" ,f, img, 0, y, w, dy, step, rgb{v0,v0,v0} , rgb{v1,v1,v1} ); y += dy;
+    draw_color_scale("low-r" ,f, img, 0, y, w, dy, step, rgb{v0,v0,v0} , rgb{v1,v0,v0} ); y += dy;
+    draw_color_scale("low-g" ,f, img, 0, y, w, dy, step, rgb{v0,v0,v0} , rgb{v0,v1,v0} ); y += dy;
+    draw_color_scale("low-b" ,f, img, 0, y, w, dy, step, rgb{v0,v0,v0} , rgb{v0,v0,v1} ); y += dy;
+    draw_color_scale("low-y" ,f, img, 0, y, w, dy, step, rgb{v0,v0,v0} , rgb{v1,v1,v0} ); y += dy;
+    draw_color_scale("low-m" ,f, img, 0, y, w, dy, step, rgb{v0,v0,v0} , rgb{v1,v0,v1} ); y += dy;
+    draw_color_scale("low-c" ,f, img, 0, y, w, dy, step, rgb{v0,v0,v0} , rgb{v0,v1,v1} ); y += dy;
+    y += 2*dy ;
+
+    v0=255; v1=255-31 ;
+    draw_color_scale("high-g" ,f, img, 0, y, w, dy, step, rgb{v0,v0,v0} , rgb{v1,v1,v1} ); y += dy;
+    draw_color_scale("high-r" ,f, img, 0, y, w, dy, step, rgb{v0,v0,v0} , rgb{v1,v0,v0} ); y += dy;
+    draw_color_scale("high-g" ,f, img, 0, y, w, dy, step, rgb{v0,v0,v0} , rgb{v0,v1,v0} ); y += dy;
+    draw_color_scale("high-b" ,f, img, 0, y, w, dy, step, rgb{v0,v0,v0} , rgb{v0,v0,v1} ); y += dy;
+    draw_color_scale("high-y" ,f, img, 0, y, w, dy, step, rgb{v0,v0,v0} , rgb{v1,v1,v0} ); y += dy;
+    draw_color_scale("high-m" ,f, img, 0, y, w, dy, step, rgb{v0,v0,v0} , rgb{v1,v0,v1} ); y += dy;
+    draw_color_scale("high-c" ,f, img, 0, y, w, dy, step, rgb{v0,v0,v0} , rgb{v0,v1,v1} ); y += dy;
+
+    if (f) fclose(f);
+
+    if (ref) {
+      fprintf(stderr,"Writing reference image '%s'\n",ref);
+      img.write_ppm(ref) ; 
+    }
     
+    for (int i=0;i<length;i++) {
+      
+      if (getenv("ANIMATE_TEST_COLOR")) {
+        img.fillbox( 0, h-20, w, 15 , img.rgb(0,0,30) ) ;
+        img.fillbox( w/2 + (w*0.25)*sin(+0.0+1*2*(M_PI*i)/length), h-20 , 10, 15 , img.rgb(255,0,0) ) ;
+        img.fillbox( w/2 + (w*0.13)*sin(-0.3-2*2*(M_PI*i)/length), h-20 , 10, 15 , img.rgb(0,255,0) ) ;
+        img.fillbox( w/2 + (w*0.13)*sin(-1.5+2*2*(M_PI*i)/length), h-20 , 10, 15 , img.rgb(0,0,255) ) ;
+      }
+      
+      frame_writer.add_frame( (unsigned char*) img.data, usec, false);
+      usec += 1000000/20 ;
+    }
+  }
+  return EXIT_SUCCESS;
+}
+
+int do_wayland_capture(FrameWriterParams ffmpegParams) 
+{
+  
     display = wl_display_connect(NULL);
     if (display == NULL) {
         fprintf(stderr, "failed to create display: %m\n");
@@ -1029,7 +1204,7 @@ int main(int argc, char *argv[])
         if (!spawned_thread)
         {
             writer_thread = std::thread([=] () {
-                write_loop(params, pulseParams);
+                write_loop(ffmpegParams, pulseParams);
             });
 
             spawned_thread = true;
@@ -1054,4 +1229,203 @@ int main(int argc, char *argv[])
         wl_buffer_destroy(buffer.wl_buffer);
 
     return EXIT_SUCCESS;
+}
+
+int main(int argc, char *argv[])
+{
+    FrameWriterParams params;
+    params.file = default_filename;
+    params.codec = DEFAULT_CODEC;
+    params.enable_ffmpeg_debug_output = false;
+    params.enable_audio = false;
+    params.to_yuv = false;
+    params.trace_video_progress=false;   
+
+    std::string cmdline_output = default_cmdline_output;
+
+    // Some generic default encoder options
+    params.codec_options["colorspace"]="bt470bg" ; 
+    params.codec_options["color_range"]="jpeg" ;
+
+    enum Mode
+      {
+       MODE_WAYLAND_CAPTURE, 
+       MODE_TEST_COLORS
+      } ;
+
+    Mode mode = MODE_WAYLAND_CAPTURE ;
+    wl_shm_format test_format = WL_SHM_FORMAT_XRGB8888 ; 
+      
+    int c, i;
+    std::string param;
+    size_t pos;
+    const char *optstring = gen_optstring();
+    //  std::cerr << "optstring = " << optstring << "\n";    
+    while((c = getopt_long(argc, argv, optstring, options, &i)) != -1)
+    {
+        switch(c)
+        {
+            case ARG_HELP:
+              show_usage(std::cerr, argv[0]);
+                return EXIT_FAILURE;
+                
+            case ARG_OUTPUT:
+              {
+                params.file = time_format(optarg);
+              }
+              break ;
+              
+            case ARG_FILE:
+                params.file = optarg;
+                break;
+
+            case ARG_SCREEN:
+                cmdline_output = optarg;
+                break;
+
+            case ARG_GEOMETRY:
+                selected_region.set_from_string(optarg);
+                break;
+
+            case ARG_ENCODER:
+                params.codec = optarg;
+                break;
+
+            case ARG_HW_ACCEL:
+                params.hw_method = optarg;
+                break;
+
+            case ARG_HW_DEVICE:
+                params.hw_device = optarg;
+                break;
+
+            case ARG_FFMPEG_DEBUG:
+                params.enable_ffmpeg_debug_output = true;
+                break;
+
+            case ARG_AUDIO:
+                params.enable_audio = true;
+                pulseParams.audio_source = optarg ? strdup(optarg) : NULL;
+                break;
+
+            case ARG_YUV420P:
+                params.to_yuv = true;
+                break;
+
+            case ARG_VIDEO_FILTER:
+                params.video_filter = optarg;
+                break;
+
+            case ARG_SET_TEST_FORMAT:
+              {
+                bool found=false;
+                for ( const PixelFormatInfo & it : supported_pixel_formats ) {
+                  found = !strcmp(it.name,optarg) ;
+                  if (found) {
+                    test_format = it.wl_fmt ;
+                    break;
+                  }
+                }
+                if (!found) {
+                  std::cerr << "Unknown pixel format '" << optarg << "'\n" ;
+                  std::cerr << "Expected:" ;                  
+                  char sep = ' ';
+                  for ( const PixelFormatInfo & it : supported_pixel_formats ) {
+                    std::cerr << sep << it.name  ;
+                    sep=' ';
+                  }
+                  std::cerr << std::endl ;
+                  exit(1);
+                }
+              }
+              break;
+                
+            case ARG_ENCODER_PARAM:
+                param = optarg;
+                pos = param.find("=");
+                if (pos != std::string::npos )
+                {
+                  auto optname = param.substr(0, pos);
+                  auto optvalue = param.substr(pos + 1, param.length() - pos - 1);                  
+                  params.codec_options[optname] = optvalue;
+                  // If given 'name=' then clear the option
+                  if ( optvalue.empty() ) {
+                    auto it = params.codec_options.find(optname) ;
+                    if ( it != params.codec_options.end() )
+                        params.codec_options.erase(it) ;
+                  }
+                } else
+                {
+                  fprintf(stderr,"Malformed encoder option '%s' (expect 'NAME=VALUE')\n", optarg);
+                  exit(1);
+                }
+                break;
+
+           case ARG_VIDEO_TRACE:
+                params.trace_video_progress=true;
+                break; 
+
+           case ARG_VAAPI:
+                params.hw_method = "vaapi";
+                break;
+
+           case ARG_SHOW_MOUSE:
+                show_cursor = true;
+                break;
+
+           case ARG_HIDE_MOUSE:
+                show_cursor = false;
+                break;
+
+           case ARG_TEST_COLORS:
+                mode = MODE_TEST_COLORS;
+                break;
+                
+            default:
+                printf("Non implemented command line option (%s)\n", optarg);
+               return EXIT_FAILURE ;
+        }
+    }
+
+    // No unprocessed arguments
+    if (optind != argc) {
+      fprintf(stderr,"Unexpected argument '%s'\n",argv[optind]);
+      return EXIT_FAILURE;
+    }
+
+    // Guess the hw_method for some known codecs.
+    if ( params.hw_method.empty() && !params.codec.empty() ) {
+      auto it = auto_hwaccel.find(params.codec) ;
+      if ( it != auto_hwaccel.end() ) {
+        fprintf(stderr, "Using %s for encoder %s\n", it->second.c_str(), params.codec.c_str());
+        params.hw_method = it->second ;
+      }
+    }   
+
+    // Guess a video filter for some hw methods
+    if ( params.video_filter.empty() && !params.codec.empty() ) {
+      std::cerr << "GUESSING filter\n";
+      auto it = auto_filter.find(params.codec) ;
+      if ( it != auto_filter.end() ) {
+        fprintf(stderr, "Using default filter '%s' for hardware %s\n", it->second.c_str(), params.hw_method.c_str());
+        params.video_filter = it->second ;
+      }
+    }
+    
+    // Sensible default when using vaapi. 
+    if ( params.hw_method == "vaapi" ) {
+      // TODO: find the first render device.
+      if ( params.hw_device.empty() || params.hw_device=="auto" ) {
+        params.hw_device = "/dev/dri/renderD128" ;
+      }
+    }
+
+    switch(mode) {
+    case MODE_WAYLAND_CAPTURE:
+      return do_wayland_capture(params) ;
+    case MODE_TEST_COLORS:
+      return do_test_colors(params, test_format);
+    default:
+      return EXIT_SUCCESS;
+    }
 }

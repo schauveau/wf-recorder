@@ -96,6 +96,9 @@ void FrameWriter::load_codec_options(AVDictionary **dict)
 
 AVPixelFormat FrameWriter::get_input_format()
 {
+  // TODO: use RGBA instead of  RGB0 because of the 'overlay' filter.
+  //       ==> Should set it back to RGB0 before the encoder.
+  //       ==> Manually? can a filter do that?
   return params.format == INPUT_FORMAT_BGR0 ?
     AV_PIX_FMT_BGRA : AV_PIX_FMT_RGBA;
 }
@@ -768,17 +771,12 @@ FrameWriter::~FrameWriter()
   // Closing the file.
   if (!(outputFmt->flags & AVFMT_NOFILE))
     avio_closep(&fmtCtx->pb);
-
   avcodec_close(videoStream->codec);
   // Freeing all the allocated memory:
-  sws_freeContext(swsCtx);
-
   av_frame_free(&encoder_frame);
   if (params.enable_audio)
     avcodec_close(audioStream->codec);
-
   // TODO: free all HW related stuffs.
   // TODO: free all Filter related stuffs.
-  
   avformat_free_context(fmtCtx);
 }
