@@ -369,6 +369,18 @@ In found that `bt470bg` (PAL/SECAM) and `smpte170m`(NTSC)  are the only two colo
 
 Remark: that has nothing to do with your actual location. 
 
+## Color accuracy test
+
+The shell script utils/test-color.sh can produce a single visual diagnostic of
+the color accuracy for a given configuration.
+
+Execute utils/test-color.sh using with a complete wl-recorder-x command as argument.
+The option `--test-colors` is automatically added to replace the screen input by a
+builtin color pattern. The first frame of the produced video vile is extracted and
+compared to the reference pattern using 
+
+
+
 # TODO list, Future improvements
 
 ## Adjust the default filter according to the selected profile. 

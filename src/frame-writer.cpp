@@ -9,6 +9,7 @@
 #include <queue>
 #include <cstring>
 #include "averr.h"
+#include <iomanip>
 
 #define AUDIO_RATE 44100
 
@@ -39,6 +40,85 @@ public :
 };
 
 static FFmpegInitialize ffmpegInitialize;
+
+
+#define forall_codecs(var) for ( void * var##_it = NULL ; (codec=av_codec_iterate(&var##_it)) ; )
+#define forall_output_formats(var) for ( void * var##_it = NULL ; (var=av_muxer_iterate(&var##_it)) ; )
+
+#define hex_format(val) "0x" << std::hex << std::setw(sizeof(val)*2) << std::setfill('0') << val << std::setfill(' ')
+
+void
+FrameWriter::dump_available_encoders(std::ostream &out)
+{
+  const AVCodec *codec = NULL ;
+  out << "Available encoders:" << std::endl ; 
+  //for ( void * it = NULL ; (codec=av_codec_iterate(&it)) ; ) {
+  forall_codecs(codec) {
+    if ( codec->type != AVMEDIA_TYPE_VIDEO )
+      continue ;
+    if (!av_codec_is_encoder(codec))
+      continue ;
+    out << std::left << std::setw(18) << codec->name  ;    
+    //    out <<  " caps:    " << hex_format(codec->capabilities) ;
+    out <<  " (" << codec->long_name << ")" ;
+
+
+    // TODO: Dump HW information
+    //
+    // Remark: as of ffmpeg 4.1, avcodec_get_hw_config() does not work.
+    // It only appers to be set for a small subset of the encoders?
+    //
+    // while( const AVCodecHWConfig * hwc = avcodec_get_hw_config(codec,index++) ) {
+    //  out << " hw=" << hwc->device_type ;
+    // }
+    //
+    out << "\n" ;
+  }
+
+  out << "\nOutput formats:\n" ;
+
+  void *it = NULL;
+  while (true) {
+    const AVOutputFormat * fmt = av_muxer_iterate(&it) ;    
+    if (!fmt)
+      break ;
+    if (fmt->video_codec == AV_CODEC_ID_NONE)
+      continue ;
+    if ( fmt->flags & AVFMT_NEEDNUMBER ) {
+      //continue ;
+    }
+    out << std::left << std::setw(15) << fmt->name ;
+
+    out << " " << hex_format(fmt->flags) ;
+
+    if ( fmt->extensions ) {
+      out <<" (" << fmt->extensions << ") ";
+    }
+    
+#define DO_FLAG(f) if ( fmt->flags & AVFMT_##f ) { out << " " << #f ; } 
+    DO_FLAG(NOFILE);
+    DO_FLAG(NEEDNUMBER);
+    //DO_FLAG(SHOW_IDS);
+    //DO_FLAG(GLOBALHEADER);
+    //DO_FLAG(NOTIMESTAMPS);
+    //DO_FLAG(GENERIC_INDEX);
+    //DO_FLAG(TS_DISCONT);
+    DO_FLAG(VARIABLE_FPS);
+    //DO_FLAG(NODIMENSIONS);
+    //DO_FLAG(NOSTREAMS);
+    //DO_FLAG(NOBINSEARCH);
+    //DO_FLAG(NOGENSEARCH);
+    //DO_FLAG(NO_BYTE_SEEK);
+    //DO_FLAG(ALLOW_FLUSH);
+    //DO_FLAG(TS_NONSTRICT);
+    //DO_FLAG(TS_NEGATIVE);
+    //DO_FLAG(SEEK_TO_PTS);
+    out << "\n" ;
+    //out << fmt->name << "\n";
+  }
+  out << ".\n";
+  
+}
 
 void FrameWriter::init_hw_accel()
 {
@@ -266,7 +346,11 @@ void FrameWriter::init_video_filters(AVCodec *codec)
   // TODO: Make that configurable (as in ffmpeg -scale_sws_opts)
   //
   
-  filter_graph->scale_sws_opts = av_strdup("in_range=jpeg:out_range=jpeg");
+#if 1
+  //filter_graph->scale_sws_opts = av_strdup("in_range=pc");
+  filter_graph->scale_sws_opts = av_strdup("in_range=pc:out_range=pc");
+  //filter_graph->scale_sws_opts = av_strdup("in_range=tv:out_range=tv");
+#endif
   
   std::string filter_text = params.video_filter ;
   if ( filter_text.empty() ) {
@@ -297,7 +381,7 @@ void FrameWriter::init_video_filters(AVCodec *codec)
       }
     }
   }
-  
+
   err = avfilter_graph_config(filter_graph, NULL);
   if (err<0) {
     std::cerr << "Failed to configure graph filter: " << averr(err) << std::endl;;    
@@ -374,7 +458,8 @@ void FrameWriter::init_video_stream()
   videoCodecCtx->time_base  = vfilter.time_base; // may be changed by avcodec_open2
   videoCodecCtx->sample_aspect_ratio = vfilter.sar ;
 
-  // This is just a hint. Some encoders will change the value to AVCOL_RANGE_MPEG.
+  // This is just a hint. Some encoders will change the value to AVCOL_RANGE_MPEG
+  // (e.g. vp9_vaapi)
   videoCodecCtx->color_range = AVCOL_RANGE_JPEG ;
   
   // Note: since out input if RGB, FFMpeg will usually select
@@ -405,6 +490,33 @@ void FrameWriter::init_video_stream()
   }
   av_dict_free(&options);
 
+#if 1
+  // 
+  // Those are taken from ffmpeg.c but I am not sure that they are really needed
+  // because their videoCodecCtx is not equal to their videoStream->codec
+  //
+  //
+  err = avcodec_parameters_from_context(videoStream->codecpar, videoCodecCtx);
+  if (err < 0) {
+    std::cerr << "avcodec_parameters_from_context failed: " << averr(err) << std::endl;
+    std::exit(-1);
+  }
+
+  
+  if (videoCodecCtx->nb_coded_side_data) {
+    int i;
+    for (i = 0; i < videoCodecCtx->nb_coded_side_data; i++) {
+      const AVPacketSideData *sd_src = &videoCodecCtx->coded_side_data[i];
+      uint8_t *dst_data = av_stream_new_side_data(videoStream, sd_src->type, sd_src->size);
+      if (!dst_data) {
+        std::cerr << "bad side data" << std::endl;
+        std::exit(-1);
+      }
+      memcpy(dst_data, sd_src->data, sd_src->size);
+    }
+  }
+#endif
+  
   // Use the same time_base for the stream than for the codec.
   // This is not strictly necessary but that makes sense.
   // Reminder:
@@ -525,7 +637,9 @@ FrameWriter::FrameWriter(const FrameWriterParams& _params) :
 {
   if (params.enable_ffmpeg_debug_output)
     av_log_set_level(AV_LOG_DEBUG);
-    
+  else
+    av_log_set_level(AV_LOG_WARNING);
+  
   // Preparing the data concerning the format and codec,
   // in order to write properly the header, frame data and end of file.
   this->outputFmt = av_guess_format(NULL, params.file.c_str(), NULL);
@@ -574,7 +688,6 @@ void FrameWriter::add_frame(const uint8_t* pixels, int64_t usec, bool y_invert)
   // so this is probably ignored.
   if (true) {
     frame->color_range = AVCOL_RANGE_JPEG ;
-    //  av_frame_set_color_range(frame,AVCOL_RANGE_JPEG);
   }
 
 
@@ -627,8 +740,8 @@ void FrameWriter::add_frame(const uint8_t* pixels, int64_t usec, bool y_invert)
     //       have additional flags set. 
     filtered_frame->pict_type = AV_PICTURE_TYPE_NONE;
 
-    //    printf("filtered color_range = %d\n", filtered_frame->color_range );
-    //    filtered_frame->color_range = AVCOL_RANGE_JPEG;
+    // printf("filtered color_range = %d\n", filtered_frame->color_range );
+    // filtered_frame->color_range = AVCOL_RANGE_JPEG;
     // So we have a frame. Encode it!
     
     AVPacket pkt;

@@ -7,12 +7,14 @@
 # argument, extract the first frame of the output and display the color
 # differences wth the reference image using compare_images.sh
 #
+# If the environment variable VIEWER is set then it is used as
+# an command to visualise the final output image. 
 #
 # Example:
 #
-#   test-colors wf-recorder-x -p color_range=1 -e libx265 
-#
-#
+#   export VIEWER="imvr -u nearest_neighbour"
+#   test-color wf-recorder-x -p color_range=1 -e libx265 
+#   test-color wf-recorder-x -e libx265 
 #
 
 HERE="$(dirname "$0")"
@@ -67,6 +69,10 @@ export COLOR_TEST_INFO="${prefix}.info"
 
 ) 2>&1 | tee "$log"
 
-echo "Output: $out"
+if [ -n "$VIEWER" ] ; then
+    $VIEWER "$out"
+else
+    echo "Warning: VIEWER is not set."
+fi
 
-imvr -u nearest_neighbour "$out" &
+echo "Output: $out"

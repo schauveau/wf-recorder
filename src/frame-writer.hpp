@@ -103,6 +103,10 @@ class FrameWriter
   void send_audio_pkt(AVFrame *frame);
   
   void finish_frame(AVPacket& pkt, bool isVideo);
+
+public: // stsatic utility functions
+  
+  static void dump_available_encoders(std::ostream &out); 
   
 public :
   FrameWriter(const FrameWriterParams& params);
@@ -122,5 +126,8 @@ public :
 extern std::mutex frame_writer_mutex, frame_writer_pending_mutex;
 extern std::unique_ptr<FrameWriter> frame_writer;
 extern std::atomic<bool> exit_main_loop;
+
+
+
 
 #endif // FRAME_WRITER

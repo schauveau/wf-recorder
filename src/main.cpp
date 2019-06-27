@@ -585,7 +585,7 @@ static struct option options[] =
    { "param",           required_argument, NULL, ARG_ENCODER_PARAM },
    { "hw-device",       required_argument, NULL, ARG_HW_DEVICE },
    { "hw-accel",        required_argument, NULL, ARG_HW_ACCEL },
-   { "ffmeg-debug",     no_argument,       NULL, ARG_FFMPEG_DEBUG },
+   { "ffmpeg-debug",    no_argument,       NULL, ARG_FFMPEG_DEBUG },
    { "audio",           optional_argument, NULL, ARG_AUDIO },
    { "yuv420p",         no_argument,       NULL, ARG_YUV420P},   
    { "video-filter",    required_argument, NULL, ARG_VIDEO_FILTER},
@@ -997,7 +997,7 @@ int do_test_colors(FrameWriterParams params, wl_shm_format wl_fmt)
     img.fill( img.gray(128) ) ;
 
     int dy = h/32 ;
-    int y  = dy*3 ;
+    int y  = dy ;
 
     int step = 32;
 
@@ -1028,7 +1028,7 @@ int do_test_colors(FrameWriterParams params, wl_shm_format wl_fmt)
     draw_color_scale("full-y" ,f, img, 0, y, w, dy, step, rgb{v0,v0,v0} , rgb{v1,v1,v0} ); y += dy;
     draw_color_scale("full-m" ,f, img, 0, y, w, dy, step, rgb{v0,v0,v0} , rgb{v1,v0,v1} ); y += dy;
     draw_color_scale("full-c" ,f, img, 0, y, w, dy, step, rgb{v0,v0,v0} , rgb{v0,v1,v1} ); y += dy;
-    y += 2*dy ;    
+    y += dy ;    
 
     v0 = 0 ; v1 = 31 ; 
     draw_color_scale("low-g" ,f, img, 0, y, w, dy, step, rgb{v0,v0,v0} , rgb{v1,v1,v1} ); y += dy;
@@ -1038,7 +1038,7 @@ int do_test_colors(FrameWriterParams params, wl_shm_format wl_fmt)
     draw_color_scale("low-y" ,f, img, 0, y, w, dy, step, rgb{v0,v0,v0} , rgb{v1,v1,v0} ); y += dy;
     draw_color_scale("low-m" ,f, img, 0, y, w, dy, step, rgb{v0,v0,v0} , rgb{v1,v0,v1} ); y += dy;
     draw_color_scale("low-c" ,f, img, 0, y, w, dy, step, rgb{v0,v0,v0} , rgb{v0,v1,v1} ); y += dy;
-    y += 2*dy ;
+    y += dy ;
 
     v0=255; v1=255-31 ;
     draw_color_scale("high-g" ,f, img, 0, y, w, dy, step, rgb{v0,v0,v0} , rgb{v1,v1,v1} ); y += dy;
@@ -1048,6 +1048,17 @@ int do_test_colors(FrameWriterParams params, wl_shm_format wl_fmt)
     draw_color_scale("high-y" ,f, img, 0, y, w, dy, step, rgb{v0,v0,v0} , rgb{v1,v1,v0} ); y += dy;
     draw_color_scale("high-m" ,f, img, 0, y, w, dy, step, rgb{v0,v0,v0} , rgb{v1,v0,v1} ); y += dy;
     draw_color_scale("high-c" ,f, img, 0, y, w, dy, step, rgb{v0,v0,v0} , rgb{v0,v1,v1} ); y += dy;
+
+    y += dy ;
+    while (y<h) {
+      for (int x=0;x<w;x++) {
+        int v0 = (x*255)/(w-1) ;
+        int v1 = std::min(std::max(0,v0 + ((y-x)&8) - 4),255); 
+        Image::color_t c0 = img.rgb(v1,v1,v1) ;
+        img.set(x,y,c0) ;
+      }      
+      y++ ;
+    }
 
     if (f) fclose(f);
 
@@ -1166,9 +1177,10 @@ int do_wayland_capture(FrameWriterParams ffmpegParams)
 
     while(!exit_main_loop)
     {
+
         // wait for a free buffer
         while(buffers[active_buffer].released != true) {
-            std::this_thread::sleep_for(std::chrono::microseconds(500));
+          std::this_thread::sleep_for(std::chrono::microseconds(500));
         }
 
         buffer_copy_done = false;
@@ -1196,6 +1208,7 @@ int do_wayland_capture(FrameWriterParams ffmpegParams)
 
         while (!buffer_copy_done && wl_display_dispatch(display) != -1) {
             // This space is intentionally left blank
+          // std::this_thread::sleep_for(std::chrono::microseconds(500));
         }
 
         auto& buffer = buffers[active_buffer];
@@ -1241,6 +1254,8 @@ int main(int argc, char *argv[])
     params.to_yuv = false;
     params.trace_video_progress=false;   
 
+    //    FrameWriter::dump_available_encoders(std::cout);
+    
     std::string cmdline_output = default_cmdline_output;
 
     // Some generic default encoder options
