@@ -554,6 +554,7 @@ static wf_recorder_output* detect_output_from_region(const capture_region& regio
 static const int ARG_HELP           = 'h';
 static const int ARG_SCREEN         = 's';
 static const int ARG_FILE           = 'f';  
+static const int ARG_FILE_FORMAT    = 'F';  
 static const int ARG_GEOMETRY       = 'g';
 static const int ARG_OUTPUT         = 'o';
 static const int ARG_ENCODER        = 'e';
@@ -578,6 +579,7 @@ static struct option options[] =
    { "screen",          required_argument, NULL, ARG_SCREEN },
    { "output",          required_argument, NULL, ARG_OUTPUT },
    { "file",            required_argument, NULL, ARG_FILE },
+   { "file-format",     required_argument, NULL, ARG_FILE_FORMAT },
    { "geometry",        required_argument, NULL, ARG_GEOMETRY },
    { "encoder",         required_argument, NULL, ARG_ENCODER },
    { "hide-mouse",      no_argument,       NULL, ARG_HIDE_MOUSE },
@@ -675,6 +677,11 @@ static void show_usage(std::ostream &out, const char *app)
       argname = "FILENAME";
       text << "Set the name of the output file. The default" << std::endl << indent;
       text << "is " << default_filename  ;
+      break;
+    case ARG_FILE_FORMAT:
+      argname = "FILENAME";
+      text << "Set the name format of the output file. The default is to" << std::endl << indent;
+      text << "autodetect the format from the file name";
       break;
     case ARG_GEOMETRY:
       argname = "REGION";
@@ -1292,6 +1299,10 @@ int main(int argc, char *argv[])
               
             case ARG_FILE:
                 params.file = optarg;
+                break;
+
+            case ARG_FILE_FORMAT:
+                params.file_format = optarg;
                 break;
 
             case ARG_SCREEN:

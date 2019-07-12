@@ -36,6 +36,7 @@ enum InputFormat
 struct FrameWriterParams
 {
     std::string file;
+    std::string file_format;
     int width;
     int height;
 

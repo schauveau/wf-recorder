@@ -649,7 +649,11 @@ FrameWriter::FrameWriter(const FrameWriterParams& _params) :
       std::exit(-1);
     }
 
-  if (avformat_alloc_output_context2(&this->fmtCtx, NULL, NULL, params.file.c_str()) < 0)
+  if (avformat_alloc_output_context2(&this->fmtCtx,
+                                     NULL,
+                                     params.file_format.empty() ? NULL : params.file_format.c_str(),
+                                     params.file.c_str()
+                                     ) < 0)
     {
       std::cerr << "Failed to allocate output context" << std::endl;
       std::exit(-1);
